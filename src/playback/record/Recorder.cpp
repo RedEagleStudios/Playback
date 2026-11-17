@@ -34,9 +34,11 @@
 #include "mc/network/packet/AddActorPacket.h"
 #include "mc/network/packet/AddItemActorPacket.h"
 #include "mc/network/packet/AddPlayerPacket.h"
+#include "mc/network/packet/AnimateEntityPacket.h"
 #include "mc/network/packet/AnimatePacket.h"
 #include "mc/network/packet/BlockActorDataPacket.h"
 #include "mc/network/packet/BlockEventPacket.h"
+#include "mc/network/packet/CameraInstructionPacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
 #include "mc/network/packet/ChangeEntityScore.h"
 #include "mc/network/packet/ChangeFakePlayerScore.h"
@@ -368,6 +370,7 @@ bool packetMayReferenceRecordedPlayer(MinecraftPacketIds packetId) {
     case MinecraftPacketIds::Animate:
     case MinecraftPacketIds::PlayerAction:
     case MinecraftPacketIds::LevelSoundEvent:
+    case MinecraftPacketIds::TriggerAnimation:
     case MinecraftPacketIds::UpdatePlayerGameType:
         return true;
     default:
@@ -410,6 +413,10 @@ bool referencesRecordedPlayer(
     }
     case MinecraftPacketIds::ActorEvent:
         return runtime(static_cast<ActorEventPacket const&>(packet).mRuntimeId);
+    case MinecraftPacketIds::TriggerAnimation: {
+        auto const& ids = *static_cast<AnimateEntityPacket const&>(packet).mRuntimeIds;
+        return std::any_of(ids.begin(), ids.end(), runtime);
+    }
     case MinecraftPacketIds::MobEffect:
         return runtime(static_cast<MobEffectPacket const&>(packet).mRuntimeId);
     case MinecraftPacketIds::UpdateAttributes:
@@ -497,6 +504,16 @@ bool remapRecordedPlayerReferences(
     }
     case MinecraftPacketIds::ActorEvent:
         return remapRuntimeId(static_cast<ActorEventPacket&>(packet).mRuntimeId, sourceRuntimeId, targetRuntimeId);
+    case MinecraftPacketIds::TriggerAnimation: {
+        // /playanimation and add-on animations played on the recording player.
+        bool changed = false;
+        for (auto& id : *static_cast<AnimateEntityPacket&>(packet).mRuntimeIds) {
+            if (id.rawID != sourceRuntimeId.rawID) continue;
+            id      = targetRuntimeId;
+            changed = true;
+        }
+        return changed;
+    }
     case MinecraftPacketIds::MobEffect:
         return remapRuntimeId(static_cast<MobEffectPacket&>(packet).mRuntimeId, sourceRuntimeId, targetRuntimeId);
     case MinecraftPacketIds::UpdateAttributes:
@@ -2559,6 +2576,23 @@ bool Recorder::writeLocalCameraOffset() {
         failRecording(error.value_or("Unable to queue the local camera offset"));
         return false;
     }
+    return writeCommandCamera();
+}
+
+bool Recorder::writeCommandCamera() {
+    if (!mCommandCameraActive.load(std::memory_order_acquire)) return true;
+    auto const view = keyframe::captureClientCamera();
+    if (!view) return true;
+    if (!mAsyncReplaySaver->submit([view = *view](ReplayWriter& writer) {
+            auto& action = ActionCommandCamera::getInstance();
+            writer.startAction(action);
+            ActionCommandCamera::write(writer.mStream, view);
+            writer.finishAction(action);
+        })) {
+        auto error = mAsyncReplaySaver->getError();
+        failRecording(error.value_or("Unable to queue the command camera view"));
+        return false;
+    }
     return true;
 }
 
@@ -3305,6 +3339,18 @@ void Recorder::resetSnapshotColumnCache() {
 
 void Recorder::recordGamePacket(Packet const& packet, std::string_view payload) {
     auto const packetId = packet.getId();
+    if (packetId == MinecraftPacketIds::CameraInstruction) {
+        auto const& instruction = *static_cast<CameraInstructionPacket const&>(packet).mCameraInstruction;
+        // A clear and a new camera can share one instruction; the new camera wins.
+        if (instruction.mClear->value_or(false)) mCommandCameraActive.store(false, std::memory_order_release);
+        if (instruction.mSet->has_value() || instruction.mSpline->has_value()
+            || instruction.mAttachToEntity->has_value()) {
+            mCommandCameraActive.store(true, std::memory_order_release);
+        }
+    } else if (packetId == MinecraftPacketIds::StartGame) {
+        // A new world starts with the player's own camera.
+        mCommandCameraActive.store(false, std::memory_order_release);
+    }
     if (mState.load(std::memory_order_acquire) != State::Idle) markSnapshotColumnsDirty(packet);
     auto const semantics = describePacketLifecycle(packetId);
     switch (semantics.lifecycle) {

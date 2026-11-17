@@ -1,6 +1,7 @@
 #pragma once
 
 #include "playback/keyframe/CameraRenderState.h"
+#include "playback/keyframe/FollowCamera.h"
 #include "playback/record/Recorder.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
@@ -236,6 +237,18 @@ private:
     // subject in its place.
     std::atomic<PreviewShotMode>                mPreviewShotMode{PreviewShotMode::None};
     std::atomic<bool>                           mShotThirdPerson{false};
+    // The third-person framing the preview shows: the person track's follow settings, its first key and id, or the
+    // defaults (vanilla F5) for the user's own follow, which has no id. Written on the client tick, read by renders.
+    struct ShotFollow {
+        state::editing::model::FollowSettings settings;
+        int                                   startTick{};
+        std::string                           cameraId;
+    };
+    mutable std::mutex mShotFollowMutex;
+    ShotFollow         mShotFollow;
+    // Render thread only: the smoothing lag of the shown framing, restarted when the track changes.
+    keyframe::FollowSmoother                    mFollowSmoother;
+    std::string                                 mSmoothedCameraId;
     bool                                        mFollowViewApplied{false};
     bool                                        mFollowViewThirdApplied{false};
     bool                                        mTeleportToSubjectPending{false};
@@ -251,6 +264,11 @@ private:
     std::atomic<uint64_t>                       mObserverServerSyncEpoch{0};
     std::atomic<uint64_t>                       mObserverServerSyncSequence{0};
     std::optional<int>                          mReplayTime;
+    // Project world overrides (setWorldOverrides). mSavedRenderClouds holds the viewer's own option while hidden.
+    std::optional<int>                          mTimeOfDayOverride;
+    bool                                        mFreezeTimeOverride{true};
+    bool                                        mHideClouds{};
+    std::optional<bool>                         mSavedRenderClouds;
     std::optional<DimensionType>                mPendingReplayDimension;
     std::optional<PendingSnapshotApply>         mPendingSnapshotApply;
     std::shared_ptr<DimensionTransitionRequest> mDimensionTransitionRequest;
@@ -276,6 +294,9 @@ private:
     std::vector<std::unique_ptr<ReplayReader>>                  mReaders;
     std::vector<PlaybackSnapshotContext>                        mSnapshotContexts;
     std::vector<int>                                            mDimensionTransitionTicks;
+    // Recorded views while a server camera owned the recorder's view, tick ascending (tickOffset is the replay tick).
+    // A recording that has them gets its camera tracks from them, so its camera instructions are not replayed.
+    std::vector<ReplayReader::CommandCameraSample>              mCommandCameraSamples;
     std::vector<std::string>                                    mChunkPackets;
     std::unordered_map<size_t, std::vector<int>>                mInlineLevelChunkPacketIndices;
     std::unordered_map<size_t, std::vector<int>>                mInlineSubChunkPacketIndices;
@@ -299,6 +320,16 @@ private:
     std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
     std::unordered_set<int32_t>                                 mUnknownConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
+    // A /playanimation clip that a seek's catch-up started: the client plays it from 0, so its clock is moved on to the
+    // time it had played by the recording. The last clip per entity runtime ID, then the ones still to resume.
+    struct SeekAnimationClip {
+        ActorRuntimeID runtimeId;
+        std::string    animation;
+        int            startTick{};
+        int            attempts{};
+    };
+    std::unordered_map<uint64_t, SeekAnimationClip>             mSeekAnimationClips;
+    std::vector<SeekAnimationClip>                              mPendingAnimationClips;
     std::optional<ActorUniqueID>                                mRecordedLocalPlayerId;
     struct ReplayPlayerRecord {
         ActorUniqueID id;
@@ -522,6 +553,9 @@ private:
 
     void settleAfterSeek();
 
+    // Moves the clips a seek's catch-up started on to the time they had played by the recording, once they exist.
+    void resumeSeekAnimationClips();
+
     [[nodiscard]] bool hasPendingReplayReaderBoundary() const;
 
     [[nodiscard]] bool advanceReplayReader(bool stopAtEnd);
@@ -543,6 +577,10 @@ private:
     void applyObserverSkin(::SerializedSkinRef const& skin);
     void syncFollowedPlayerHud();
     void restoreFollowedPlayerHud();
+    // The level clock the replay shows: the recorded time, or the project's time-of-day override.
+    [[nodiscard]] std::optional<int> effectiveReplayTime() const;
+    void                             applyCloudOverride();
+    void                             restoreClouds();
     void rebindReplaySubject();
     void refreshReplaySubjectBinding();
     // Points the follow view at the preview camera track under the playhead. Export drives its own shots.
@@ -596,6 +634,9 @@ public:
 
     // Something outside the replay rewrites the level clock between render passes; export pins it before each pass.
     void enforceReplayWorldTime();
+    // The project's world look: a time of day (nullopt plays the recorded time) that is frozen or runs from the first
+    // tick, and hidden clouds. Preview and export both read it.
+    void setWorldOverrides(std::optional<int> timeOfDay, bool freezeTime, bool hideClouds);
 
     void teleportReplayPlayer(::Vec3 const& feetPosition, ::Vec2 const& rotation);
 
@@ -641,8 +682,13 @@ public:
     // subject back to the user's choice.
     void setShotSubject(std::optional<std::string> subject);
 
-    // Pulls an eye pose back behind the subject like vanilla F5, stopping short of walls.
-    [[nodiscard]] keyframe::CameraRenderState thirdPersonView(keyframe::CameraRenderState const& eye) const;
+    // Frames the subject whose eyes are at `eye` by `follow`, `shotSeconds` into its track, keeping the camera on the
+    // subject's side of walls.
+    [[nodiscard]] keyframe::CameraRenderState followView(
+        state::editing::model::FollowSettings const& follow,
+        keyframe::CameraRenderState const&           eye,
+        double                                       shotSeconds
+    ) const;
 
     struct ReplayPlayerInfo {
         std::string uuid;
@@ -711,6 +757,10 @@ public:
 
     [[nodiscard]] std::vector<int> const& getDimensionTransitionTicks() const noexcept {
         return mDimensionTransitionTicks;
+    }
+
+    [[nodiscard]] std::vector<ReplayReader::CommandCameraSample> const& getCommandCameraSamples() const noexcept {
+        return mCommandCameraSamples;
     }
 
     [[nodiscard]] float getPlaybackSpeed() const { return mPlaybackSpeed; }

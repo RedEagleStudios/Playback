@@ -1,6 +1,7 @@
 ﻿#include "EditorController.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/graphics/FogOverride.h"
 #include "playback/io/ReplayLibrary.h"
 #include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
@@ -8,6 +9,7 @@
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/CameraBindingOps.h"
 #include "playback/state/editing/ProjectStore.h"
+#include "playback/state/editing/RecordedCameraTracks.h"
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/CommandFactory.h"
 #include "playback/visuals/FrameTap.h"
@@ -156,6 +158,30 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     loadProjectForReplay(replayPath);
     mSavedRevision = mCommandStack.revision();
     mLastAutosave  = std::chrono::steady_clock::now();
+    publishCameraTimeline();
+}
+
+void EditorController::addRecordedCameraTracks() {
+    using namespace ll::i18n_literals;
+    if (mProject.recordedCameraTracksAdded) return;
+    auto const& samples = replay::ReplaySession::getInstance().getCommandCameraSamples();
+    if (samples.empty()) return;
+
+    std::vector<state::editing::RecordedCameraView> views;
+    views.reserve(samples.size());
+    for (auto const& sample : samples) views.push_back({sample.tickOffset, sample.view});
+    int number = 0;
+    for (auto& keys : state::editing::recordedCameraTracks(views)) {
+        auto const id = state::editing::CameraBindingOps::addFreeCamera(
+            mProject,
+            "playback.refactorEditor.defaults.recordedCamera"_tr(++number),
+            state::editing::model::CameraTrackKind::Keyframe
+        );
+        auto const camera = std::ranges::find(mProject.cameras, id, &state::editing::model::CameraEntity::id);
+        if (camera != mProject.cameras.end()) camera->keysByTick = std::move(keys);
+    }
+    mProject.recordedCameraTracksAdded = true;
+    logger().info("Added {} recorded camera track(s) from {} views", number, samples.size());
     publishCameraTimeline();
 }
 
@@ -318,6 +344,11 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SetCameraLocked:
         mCommandStack.push(CommandFactory::createSetCameraLocked(action.id, action.value), mProject);
         break;
+    case EditorActionType::SetCameraFollow:
+        if (action.followSettings) {
+            mCommandStack.push(CommandFactory::createSetCameraFollow(action.id, *action.followSettings), mProject);
+        }
+        break;
     case EditorActionType::RenameCamera:
         mCommandStack.push(CommandFactory::createRenameCamera(action.id, action.name), mProject);
         break;
@@ -346,7 +377,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(
             CommandFactory::createSetKeyframesInterpolation(
                 action.keyframeRefs,
-                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind),
+                action.bezierControls
             ),
             mProject
         );
@@ -365,6 +397,15 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::RenameMarker:
         mCommandStack.push(CommandFactory::createRenameMarker(action.id, action.name), mProject);
+        break;
+    case EditorActionType::SetWorldSettings:
+        mWorldPreview.reset();
+        if (action.worldSettings) {
+            mCommandStack.push(CommandFactory::createSetWorldSettings(*action.worldSettings), mProject);
+        }
+        break;
+    case EditorActionType::PreviewWorldSettings:
+        mWorldPreview = action.worldSettings ? std::optional{action.worldSettings->sanitized()} : std::nullopt;
         break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
@@ -453,11 +494,26 @@ void EditorController::publishState(bool hudVisible) {
     if (!sessionActive) {
         flushProjectOnClose();
         mActiveReplayPath.clear();
+        mWorldPreview.reset();
+        editor::graphics::setFogOverride(std::nullopt);
     }
     ensureProject(state.totalTicks, mActiveReplayPath);
+    if (sessionActive) addRecordedCameraTracks();
     mProject.currentTick             = state.currentTick;
     mProject.playing                 = !state.paused;
     mProject.playbackSpeed           = state.playbackSpeed;
+    if (sessionActive) {
+        auto const& world = mWorldPreview ? *mWorldPreview : mProject.world;
+        session.setWorldOverrides(
+            world.overrideTime ? std::optional<int>{world.timeOfDay} : std::nullopt,
+            world.freezeTime,
+            world.hideClouds
+        );
+        editor::graphics::setFogOverride(
+            world.overrideFog ? std::optional<editor::graphics::FogOverride>{{world.fogStart, world.fogEnd}}
+                              : std::nullopt
+        );
+    }
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
     state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
     if (state.cameraTimeline) {

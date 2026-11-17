@@ -33,10 +33,14 @@ struct CameraShot {
     }
 };
 
-// The view of replay player `subject` (empty is the recorder) at `time`; `thirdPerson` pulls the camera behind it
-// like vanilla F5. Without a sampler, person tracks yield no sample and the preview follows the subject natively.
-using SubjectViewSampler = std::function<
-    std::optional<CameraRenderState>(visuals::ReplaySampleTime const&, std::string const& subject, bool thirdPerson)>;
+// The view of replay player `subject` (empty is the recorder) at `time` for person track `camera`; a third-person track
+// frames the subject by its follow settings. Without a sampler, person tracks yield no sample and the preview follows
+// the subject natively.
+using SubjectViewSampler = std::function<std::optional<CameraRenderState>(
+    visuals::ReplaySampleTime const&,
+    std::string const&                         subject,
+    state::editing::model::CameraEntity const& camera
+)>;
 
 class CameraTimelineEvaluator {
 private:

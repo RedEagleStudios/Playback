@@ -1,8 +1,12 @@
 ﻿#pragma once
 
+#include "playback/keyframe/CameraRenderState.h"
+
 #include <memory>
 #include <string>
 #include <unordered_map>
+
+class BinaryStream;
 
 namespace playback::replay {
 class ReplaySession;
@@ -141,6 +145,22 @@ struct ActionLocalCameraOffset : Action {
 public:
     [[nodiscard]] static ActionLocalCameraOffset& getInstance() {
         static ActionLocalCameraOffset instance;
+        return instance;
+    }
+};
+
+// The recorder's view while a server camera owns it (/camera set or spline, add-on cutscenes): the absolute pose and
+// FOV, once per tick. Replays turn the runs into camera tracks at load, so playing one changes nothing.
+struct ActionCommandCamera : Action {
+    ActionCommandCamera() : Action("command_camera") {}
+    void handle(replay::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+    static void write(BinaryStream& stream, keyframe::CameraRenderState const& view);
+    [[nodiscard]] static keyframe::CameraRenderState read(PlaybackBuffer& data);
+
+public:
+    [[nodiscard]] static ActionCommandCamera& getInstance() {
+        static ActionCommandCamera instance;
         return instance;
     }
 };

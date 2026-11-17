@@ -3,6 +3,7 @@
 #include "playback/state/editing/models/EditorStateExt.h"
 #include "playback/state/editing/models/IEditCommand.h"
 
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -39,18 +40,24 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
+// With bezier, the keys also take those Bézier control points (an easing preset); only CubicBezier reads them.
 class SetKeyframesInterpolation final : public model::IEditCommand {
 public:
-    SetKeyframesInterpolation(std::vector<model::KeyframeRef> refs, model::CameraInterpolationType interpolation);
+    SetKeyframesInterpolation(
+        std::vector<model::KeyframeRef>                  refs,
+        model::CameraInterpolationType                   interpolation,
+        std::optional<std::array<model::Vec2, 2>> const& bezier = std::nullopt
+    );
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
     [[nodiscard]] std::string label() const override;
 
 private:
-    std::vector<model::KeyframeRef>      mRefs;
-    model::CameraInterpolationType       mInterpolation;
-    std::optional<model::EditorStateExt> mBefore;
+    std::vector<model::KeyframeRef>           mRefs;
+    model::CameraInterpolationType            mInterpolation;
+    std::optional<std::array<model::Vec2, 2>> mBezier;
+    std::optional<model::EditorStateExt>      mBefore;
 };
 
 // Inserts keyframes with explicit poses (multi-key paste). Occupied ticks and locked tracks are skipped.
@@ -282,6 +289,21 @@ private:
     std::string                          mCameraId;
     int                                  mTick;
     model::Vec3                          mRotation;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+// Replaces a third-person track's follow settings; locked tracks and other kinds are left alone.
+class SetCameraFollow final : public model::IEditCommand {
+public:
+    SetCameraFollow(std::string cameraId, model::FollowSettings const& follow);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    model::FollowSettings                mFollow;
     std::optional<model::EditorStateExt> mBefore;
 };
 

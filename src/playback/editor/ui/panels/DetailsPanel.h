@@ -1,6 +1,8 @@
 #pragma once
 
 #include "playback/editor/ui/PanelContext.h"
+#include "playback/state/editing/models/CameraEntity.h"
+#include "playback/state/editing/models/WorldSettings.h"
 
 #include <array>
 #include <optional>
@@ -24,6 +26,9 @@ private:
     void drawPreviewPage(PanelContext const& ctx);
     void drawSettingsPage(PanelContext const& ctx);
     void drawOptiPistonSection();
+    void drawWorldSection(PanelContext const& ctx);
+    // A third-person track's framing (FollowSettings).
+    void drawFollowSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera);
 
     // Each returns true when it owns the current selection and has drawn it.
     bool drawWorldActor(PanelContext const& ctx);
@@ -37,6 +42,10 @@ private:
 
     InspectorPage        mPage{InspectorPage::Selection};
     std::optional<float> mPistonDurationDraft;
+    // The World section's settings while a slider or colour is dragged; committed as one undo step on release.
+    std::optional<state::editing::model::WorldSettings> mWorldDraft;
+    // The selected third-person track's follow settings while a slider is dragged, by track id.
+    std::optional<std::pair<std::string, state::editing::model::FollowSettings>> mFollowDraft;
     // The label field edits a local copy so typing is not overwritten by the project each frame.
     std::string           mMarkerLabelId;
     std::array<char, 128> mMarkerLabelBuffer{};

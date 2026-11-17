@@ -52,7 +52,8 @@ inline float cubicBezierEase(float amount, Vec2 const& control1, Vec2 const& con
         else high = middle;
     }
     float const solved = (low + high) * 0.5f;
-    return clampUnit(cubicBezier(0.0f, control1.y, control2.y, 1.0f, solved));
+    // Unclamped: control points outside 0..1 (the Back presets) overshoot the keys on purpose.
+    return cubicBezier(0.0f, control1.y, control2.y, 1.0f, solved);
 }
 
 struct InterpolationSides {

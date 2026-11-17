@@ -416,23 +416,34 @@ void        DeleteKeyframes::undo(model::EditorStateExt& state) { restore(mBefor
 std::string DeleteKeyframes::label() const { return "Delete Keyframes"; }
 
 SetKeyframesInterpolation::SetKeyframesInterpolation(
-    std::vector<model::KeyframeRef> refs,
-    model::CameraInterpolationType  interpolation
+    std::vector<model::KeyframeRef>                  refs,
+    model::CameraInterpolationType                   interpolation,
+    std::optional<std::array<model::Vec2, 2>> const& bezier
 )
 : mRefs(std::move(refs)),
-  mInterpolation(interpolation) {}
+  mInterpolation(interpolation),
+  mBezier(bezier) {}
 
 void SetKeyframesInterpolation::execute(model::EditorStateExt& state) {
     mBefore.reset();
     auto before  = state;
     bool changed = false;
+    auto const sameControls = [](model::Vec2 const& a, model::Vec2 const& b) { return a.x == b.x && a.y == b.y; };
     for (auto const& ref : mRefs) {
         auto* camera = findCamera(state, ref.cameraId);
         if (!camera || camera->locked) continue;
         auto const key = camera->keysByTick.find(ref.tick);
-        if (key == camera->keysByTick.end() || key->second.interpolationType == mInterpolation) continue;
-        key->second.interpolationType = mInterpolation;
-        changed                       = true;
+        if (key == camera->keysByTick.end()) continue;
+        auto& keyframe             = key->second;
+        bool  keyChanged           = keyframe.interpolationType != mInterpolation;
+        keyframe.interpolationType = mInterpolation;
+        if (mBezier) {
+            keyChanged           |= !sameControls(keyframe.bezierCtrl1, (*mBezier)[0])
+                                 || !sameControls(keyframe.bezierCtrl2, (*mBezier)[1]);
+            keyframe.bezierCtrl1  = (*mBezier)[0];
+            keyframe.bezierCtrl2  = (*mBezier)[1];
+        }
+        changed |= keyChanged;
     }
     if (changed) mBefore = std::move(before);
 }
@@ -456,5 +467,21 @@ void AddKeyframes::execute(model::EditorStateExt& state) {
 
 void        AddKeyframes::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string AddKeyframes::label() const { return "Paste Keyframes"; }
+
+SetCameraFollow::SetCameraFollow(std::string cameraId, model::FollowSettings const& follow)
+: mCameraId(std::move(cameraId)),
+  mFollow(follow.sanitized()) {}
+
+void SetCameraFollow::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked || camera->kind != model::CameraTrackKind::ThirdPerson) return;
+    if (camera->follow == mFollow) return;
+    mBefore        = state;
+    camera->follow = mFollow;
+}
+
+void        SetCameraFollow::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraFollow::label() const { return "Change Camera Follow"; }
 
 } // namespace playback::state::editing::command

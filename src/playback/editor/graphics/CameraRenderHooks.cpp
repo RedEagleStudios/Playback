@@ -1,4 +1,5 @@
 ﻿#include "CameraRenderHooks.h"
+#include "FogOverride.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
@@ -909,6 +910,7 @@ bool hookCameraRender(bool enable) {
         bool fovApi{};
         bool setupCamera{};
         bool finalView{};
+        bool fog{};
     };
     static HookState state;
 
@@ -927,6 +929,7 @@ bool hookCameraRender(bool enable) {
         }
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
         setPreviewSubjectHidden(false);
+        if (state.fog && hookFogOverride(false)) state.fog = false;
         if (state.finalView && ReplayCameraViewRenderObjectHook::unhook()) state.finalView = false;
         if (state.setupCamera && ReplayCameraSetupHook::unhook()) state.setupCamera = false;
         if (state.fovApi && ReplayCameraApiFovHook::unhook()) state.fovApi = false;
@@ -954,6 +957,10 @@ bool hookCameraRender(bool enable) {
     if (!state.fovApi) state.fovApi = ReplayCameraApiFovHook::hook() == 0;
     if (!state.setupCamera) state.setupCamera = ReplayCameraSetupHook::hook() == 0;
     if (!state.finalView) state.finalView = ReplayCameraViewRenderObjectHook::hook() == 0;
+    // Optional: without it the world's fog shows, nothing else breaks.
+    if (!state.fog && !(state.fog = hookFogOverride(true))) {
+        Playback::getInstance().getSelf().getLogger().warn("Unable to install the replay fog override hook");
+    }
 
     bool const installed =
         state.frameScope && state.submitFrame && state.fov && state.fovApi && state.setupCamera && state.finalView;

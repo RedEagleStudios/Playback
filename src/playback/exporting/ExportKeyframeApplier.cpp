@@ -6,6 +6,8 @@
 #include "playback/replay/ReplaySession.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
+#include <memory>
+#include <unordered_map>
 #include <utility>
 
 namespace playback::exporting {
@@ -35,13 +37,20 @@ void ExportKeyframeApplier::configure(
         true,
         std::move(dimensionTransitionTicks),
         // Binds the track's subject, then samples it. The render hook refreshes the sleep weight for the frame it
-        // actually draws.
-        [&session](visuals::ReplaySampleTime const& time, std::string const& subject, bool thirdPerson)
-            -> std::optional<keyframe::CameraRenderState> {
+        // actually draws. Each third-person track keeps its own smoothing, restarted by a seek as in the preview.
+        [&session, smoothers = std::make_shared<std::unordered_map<std::string, keyframe::FollowSmoother>>()](
+            visuals::ReplaySampleTime const&           time,
+            std::string const&                         subject,
+            state::editing::model::CameraEntity const& camera
+        ) -> std::optional<keyframe::CameraRenderState> {
+            constexpr double TicksPerSecond = 20.0;
             session.setShotSubject(subject);
             auto state = keyframe::sampleRecordedPlayerView(time);
-            if (state && thirdPerson) state = session.thirdPersonView(*state);
-            return state;
+            if (!state || camera.kind != state::editing::model::CameraTrackKind::ThirdPerson) return state;
+            auto const   tick = static_cast<double>(time.value());
+            double const shot = (tick - camera.keysByTick.begin()->first) / TicksPerSecond;
+            auto const   view = session.followView(camera.follow, *state, shot);
+            return (*smoothers)[camera.id].apply(view, tick / TicksPerSecond, camera.follow.smoothing);
         }
     );
     keyframe::publishCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline);

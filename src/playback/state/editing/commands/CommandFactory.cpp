@@ -4,6 +4,7 @@
 #include "playback/state/editing/commands/MarkerCommands.h"
 #include "playback/state/editing/commands/SubActorCommands.h"
 #include "playback/state/editing/commands/WorldActorCommands.h"
+#include "playback/state/editing/commands/WorldCommands.h"
 
 namespace playback::state::editing::command {
 
@@ -78,6 +79,10 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraLocked(const
     return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::Locked, locked);
 }
 std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetCameraFollow(const std::string& id, model::FollowSettings const& follow) {
+    return std::make_unique<SetCameraFollow>(id, follow);
+}
+std::unique_ptr<model::IEditCommand>
 CommandFactory::createRenameCamera(const std::string& id, const std::string& name) {
     return std::make_unique<RenameCamera>(id, name);
 }
@@ -96,10 +101,11 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteCameraKeyframes
     return std::make_unique<DeleteKeyframes>(std::move(refs));
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetKeyframesInterpolation(
-    std::vector<model::KeyframeRef> refs,
-    model::CameraInterpolationType  interpolation
+    std::vector<model::KeyframeRef>                  refs,
+    model::CameraInterpolationType                   interpolation,
+    std::optional<std::array<model::Vec2, 2>> const& bezier
 ) {
-    return std::make_unique<SetKeyframesInterpolation>(std::move(refs), interpolation);
+    return std::make_unique<SetKeyframesInterpolation>(std::move(refs), interpolation, bezier);
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddCameraKeyframes(std::vector<model::KeyframeRef> refs) {
     return std::make_unique<AddKeyframes>(std::move(refs));
@@ -117,6 +123,9 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createMoveMarker(const std:
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createRenameMarker(const std::string& id, const std::string& label) {
     return std::make_unique<RenameMarker>(id, label);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetWorldSettings(model::WorldSettings const& settings) {
+    return std::make_unique<SetWorldSettings>(settings);
 }
 
 } // namespace playback::state::editing::command

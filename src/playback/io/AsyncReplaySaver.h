@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include "playback/keyframe/CameraRenderState.h"
+
 #include "mc/deps/core/utility/BinaryStream.h"
 
 #include <atomic>
@@ -145,7 +147,17 @@ private:
 
     std::unordered_map<int32_t, Action*> mActionMap;
 
+    // Every action after the snapshot with its bytes and the tick it lands in (counted from the chunk start), leaving
+    // the read position where it was.
+    void forEachAction(std::function<void(Action const&, std::string_view data, int tick)> const& visit);
+
 public:
+    // The view recorded while a server camera owned it, at a tick counted from the chunk start.
+    struct CommandCameraSample {
+        int                         tickOffset{};
+        keyframe::CameraRenderState view;
+    };
+
     explicit ReplayReader(std::string_view data);
     ~ReplayReader() = default;
 
@@ -161,6 +173,8 @@ public:
     [[nodiscard]] std::vector<PlaybackSerializedGamePacket> readConfigurationPackets();
 
     [[nodiscard]] std::vector<int> readDimensionTransitionTickOffsets();
+
+    [[nodiscard]] std::vector<CommandCameraSample> readCommandCameraSamples();
 
     void handleSnapshot(ReplaySession& replaySession);
 

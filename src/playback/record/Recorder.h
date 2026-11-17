@@ -277,6 +277,9 @@ private:
     uint64_t                      mLocalViewTicks{};   // ticks that wrote samples
     uint64_t                      mLocalViewSamples{};
     int                           mLocalViewRate{20}; // samples per second, fixed when the recording starts
+    // A server camera instruction owns the view (set, spline or attach until clear); tracked while idle too, so a
+    // recording started mid-cutscene still records it.
+    std::atomic<bool> mCommandCameraActive{false};
 
     std::optional<DimensionType>        mRecordingDimension;
     std::string                         mSnapshotFailure;
@@ -382,6 +385,8 @@ private:
 
     [[nodiscard]] bool writeEntityMovements();
     [[nodiscard]] bool writeLocalCameraOffset();
+    // The view while mCommandCameraActive, into the same tick as the camera offset.
+    [[nodiscard]] bool writeCommandCamera();
     [[nodiscard]] bool writeLocalViewSamples();
     // Ticks passed without writing the view, so the buffered frames no longer belong to the next tick.
     void discardLocalViewFrames();

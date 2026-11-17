@@ -241,6 +241,42 @@
                     "hermite": "Hermite",
                     "cubicBezier": "三次贝塞尔"
                 },
+                "easingPreset": "缓动预设",
+                "easingPresets": "缓动预设",
+                "easingPresetNone": "无",
+                "easingPresetCustom": "自定义曲线",
+                "easing": {
+                    "sine": "正弦",
+                    "quad": "二次",
+                    "cubic": "三次",
+                    "quart": "四次",
+                    "quint": "五次",
+                    "expo": "指数",
+                    "circ": "圆形",
+                    "back": "回弹",
+                    "in": "缓入",
+                    "out": "缓出",
+                    "inOut": "缓入缓出"
+                },
+                "follow": "跟随",
+                "followStyle": "构图",
+                "followStyleBehind": "身后",
+                "followStyleShoulder": "越肩",
+                "followStyleOrbit": "环绕",
+                "followStyleTripod": "三脚架",
+                "followDistance": "距离（格）",
+                "followHeight": "高度（格）",
+                "followSide": "侧向（格）",
+                "followSideHint": "正值为右肩，负值为左肩。",
+                "followOrbitSpeed": "环绕速度",
+                "followOrbitStart": "起始角度",
+                "followOrbitHint": "轨道第一个关键帧时镜头的位置：0° 在玩家南侧，90° 在西侧。正速度按 南 → 西 → 北 旋转。",
+                "followTripodAt": "镜头位于 {} {} {}",
+                "followTripodUnset": "尚未设置位置：在设置前按“身后”构图。",
+                "followTripodSet": "设为当前视角",
+                "followTripodHint": "使用你当前所看镜头的位置；请先把自由视角飞到那里。",
+                "followSmoothing": "平滑",
+                "followSmoothingHint": "镜头追上快速转向和跳跃所需的秒数；0 为不平滑。",
                 "categoryName": {
                     "default": "默认",
                     "players": "玩家",
@@ -490,13 +526,24 @@
                 "previewVolume": "音量",
                 "previewSilentPaused": "暂停时静音",
                 "previewSilentPausedHint": "回放暂停或跳转期间触发的声音不会播放。",
-                "previewAudioHint": "仅影响预览。导出的音频在导出对话框中设置。"
+                "previewAudioHint": "仅影响预览。导出的音频在导出对话框中设置。",
+                "world": "世界",
+                "worldOverrideTime": "覆盖一天中的时间",
+                "worldFreezeTime": "冻结时间",
+                "worldFreezeTimeHint": "关闭时：时间从回放开始时的设定值继续流动。",
+                "worldHideClouds": "隐藏云",
+                "worldOverrideFog": "覆盖雾",
+                "worldFogStart": "雾起始",
+                "worldFogEnd": "雾结束",
+                "worldFogDistanceHint": "占渲染距离的百分比。世界自带的雾约为 92% 到 100%；结束值超过 100% 时雾会变淡，直至消失。",
+                "worldHint": "保存在项目中。同时作用于预览和导出的视频。"
             },
             "defaults": {
                 "camera": "相机 {}",
                 "firstPersonCamera": "第一人称 {}",
                 "thirdPersonCamera": "第三人称 {}",
-                "marker": "标记 {}"
+                "marker": "标记 {}",
+                "recordedCamera": "录制的镜头 {}"
             }
         }
     }

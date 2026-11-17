@@ -59,8 +59,10 @@
 #include "mc/network/packet/AddItemActorPacket.h"
 #include "mc/network/packet/AddPaintingPacket.h"
 #include "mc/network/packet/AddPlayerPacket.h"
+#include "mc/network/packet/AnimateEntityPacket.h"
 #include "mc/network/packet/BlockActorDataPacket.h"
 #include "mc/network/packet/BlockEventPacket.h"
+#include "mc/network/packet/CameraInstructionPacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
 #include "mc/network/packet/ClientboundMapItemDataPacket.h"
 #include "mc/network/packet/ContainerClosePacket.h"
@@ -99,6 +101,8 @@
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/network/packet/UpdateSubChunkNetworkBlockInfo.h"
 #include "mc/network/packet/cerealize/core/SerializationMode.h"
+#include "mc/options/option_types/BoolOption.h"
+#include "mc/options/option_types/OptionID.h"
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/resources/MinEngineVersion.h"
 #include "mc/resources/PackInstance.h"
@@ -110,6 +114,10 @@
 #include "mc/world/actor/ActorCategory.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/animation/ActorAnimationPlayer.h"
+#include "mc/world/actor/animation/ActorAnimationType.h"
+#include "mc/world/actor/animation/ActorSkeletalAnimationPlayer.h"
+#include "mc/world/actor/animation/AnimationComponent.h"
 #include "mc/world/actor/player/Inventory.h"
 #include "mc/world/actor/player/LayeredAbilities.h"
 #include "mc/world/actor/player/Player.h"
@@ -229,6 +237,15 @@ using namespace playback::record;
 namespace {
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
+
+// The viewer's clouds option, changed without saving the options file: a crash while a project hides the clouds
+// must not leave them off.
+::BoolOption* renderCloudsOption() {
+    auto client = ll::service::getClientInstance();
+    if (!client) return nullptr;
+    auto const option = client->getOptions().getIfValid(::OptionID::RenderClouds);
+    return option ? static_cast<::BoolOption*>(*option) : nullptr;
+}
 
 constexpr std::string_view ReplayLevelIdPrefix        = "__playback_replay_world__";
 constexpr auto             CenterChunkInjectionBudget = std::chrono::milliseconds(8);
@@ -605,43 +622,31 @@ struct InjectionReset {
 
 float decodeRotationByte(uchar value) { return static_cast<float>(static_cast<schar>(value)) * (360.0f / 256.0f); }
 
-// Like vanilla third person: back along the view ray from the eyes, stopping short of the first camera-blocking block.
-keyframe::CameraRenderState thirdPersonFollowPose(Player& observer, keyframe::CameraRenderState state) {
-    constexpr float Distance     = 4.0f;
-    constexpr float WallMargin   = 0.2f;
-    constexpr float DegToRadians = 0.017453292519943295f;
-    float const     yaw          = state.yaw * DegToRadians;
-    float const     pitch        = state.pitch * DegToRadians;
-    // Opposite of the view direction {-sin(yaw)cos(pitch), -sin(pitch), cos(yaw)cos(pitch)}.
-    float const backX = std::sin(yaw) * std::cos(pitch);
-    float const backY = std::sin(pitch);
-    float const backZ = -std::cos(yaw) * std::cos(pitch);
-    Vec3 const  eye{state.x, state.y, state.z};
-    Vec3 const  target{eye.x + backX * Distance, eye.y + backY * Distance, eye.z + backZ * Distance};
+constexpr double ReplayTicksPerSecond = 20.0;
 
-    float      distance = Distance;
-    auto const hit      = observer.getDimensionBlockSource().clip(
-        eye,
-        target,
+// Blocks from `from` towards `to` before the first camera-blocking block, as vanilla third person stops at walls.
+float cameraClearance(
+    Player&                            observer,
+    keyframe::CameraRenderState const& from,
+    keyframe::CameraRenderState const& to
+) {
+    Vec3 const  start{from.x, from.y, from.z};
+    Vec3 const  end{to.x, to.y, to.z};
+    float const length = std::hypot(end.x - start.x, end.y - start.y, end.z - start.z);
+    auto const  hit    = observer.getDimensionBlockSource().clip(
+        start,
+        end,
         false,
         ShapeType::CollisionForCamera,
-        static_cast<int>(Distance) + 1,
+        static_cast<int>(length) + 1,
         false,
         false,
         nullptr,
         [](BlockSource const&, Block const&, bool) { return true; },
         false
     );
-    if (hit.mType == HitResultType::Tile) {
-        float const dx = hit.mPos.x - eye.x;
-        float const dy = hit.mPos.y - eye.y;
-        float const dz = hit.mPos.z - eye.z;
-        distance       = std::clamp(std::sqrt(dx * dx + dy * dy + dz * dz) - WallMargin, 0.0f, Distance);
-    }
-    state.x = eye.x + backX * distance;
-    state.y = eye.y + backY * distance;
-    state.z = eye.z + backZ * distance;
-    return state;
+    if (hit.mType != HitResultType::Tile) return length;
+    return std::hypot(hit.mPos.x - start.x, hit.mPos.y - start.y, hit.mPos.z - start.z);
 }
 
 void forceFirstPersonCamera() {
@@ -910,6 +915,10 @@ bool ReplaySession::start(std::filesystem::path filePath) {
 void ReplaySession::clearReplayData() {
     restoreFollowedPlayerHud();
     restoreObserverSkin();
+    restoreClouds();
+    mTimeOfDayOverride.reset();
+    mFreezeTimeOverride = true;
+    mHideClouds         = false;
     {
         std::lock_guard lock(mReplayItemRegistryMutex);
         mReplayItemRegistryPayload.clear();
@@ -991,6 +1000,7 @@ void ReplaySession::clearReplayData() {
     mReaders.clear();
     mSnapshotContexts.clear();
     mDimensionTransitionTicks.clear();
+    mCommandCameraSamples.clear();
     mChunkPackets.clear();
     mInlineLevelChunkPacketIndices.clear();
     mInlineSubChunkPacketIndices.clear();
@@ -1218,6 +1228,7 @@ void ReplaySession::updatePreviewShot() {
     auto                       mode = PreviewShotMode::None;
     std::optional<std::string> subject;
     bool                       third = false;
+    ShotFollow                 follow;
     // Player input owns the camera while captured, as it does over a paused keyframe track.
     if (!editor::input::isGameInputCaptured()) {
         if (auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
@@ -1229,10 +1240,15 @@ void ReplaySession::updatePreviewShot() {
                 mode    = PreviewShotMode::Person;
                 subject = shot.subject;
                 third   = shot.kind() == CameraTrackKind::ThirdPerson;
+                if (third) follow = {shot.camera->follow, shot.camera->keysByTick.begin()->first, shot.camera->id};
             }
         }
     }
     mShotThirdPerson.store(third, std::memory_order_release);
+    {
+        std::scoped_lock lock(mShotFollowMutex);
+        mShotFollow = std::move(follow);
+    }
     if (mPreviewShotMode.exchange(mode, std::memory_order_acq_rel) != mode) {
         getLogger().debug(
             "preview shot mode={} subject={} third={} tick={}",
@@ -1246,8 +1262,16 @@ void ReplaySession::updatePreviewShot() {
     applyFollowView();
 }
 
-keyframe::CameraRenderState ReplaySession::thirdPersonView(keyframe::CameraRenderState const& eye) const {
-    return mReplayPlayer ? thirdPersonFollowPose(*mReplayPlayer, eye) : eye;
+keyframe::CameraRenderState ReplaySession::followView(
+    state::editing::model::FollowSettings const& follow,
+    keyframe::CameraRenderState const&           eye,
+    double                                       shotSeconds
+) const {
+    if (!mReplayPlayer) return keyframe::followCameraPose(follow, eye, shotSeconds, {});
+    auto& observer = *mReplayPlayer;
+    return keyframe::followCameraPose(follow, eye, shotSeconds, [&observer](auto const& from, auto const& to) {
+        return cameraClearance(observer, from, to);
+    });
 }
 
 void ReplaySession::parkObserverAfterFollow() {
@@ -1993,16 +2017,65 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
     // The observer stays on the eyes so chunks and the server copy follow; only the drawn camera moves back.
     // The sample above refreshed the sleep weight, so a subject in bed already reads as first person here.
     if (isFollowViewThirdPerson() && visuals::isReplaySubjectThirdPerson()) {
-        state = thirdPersonFollowPose(*mReplayPlayer, *state);
+        state::editing::model::FollowSettings settings;
+        int                                   startTick{};
+        {
+            std::scoped_lock lock(mShotFollowMutex);
+            settings  = mShotFollow.settings;
+            startTick = mShotFollow.startTick;
+            if (mShotFollow.cameraId != mSmoothedCameraId) {
+                mSmoothedCameraId = mShotFollow.cameraId;
+                mFollowSmoother.reset();
+            }
+        }
+        auto const   time = getCameraRenderSampleTime();
+        double const tick = time ? static_cast<double>(time->value()) : static_cast<double>(getCurrentTick());
+        auto const   view = followView(settings, *state, (tick - startTick) / ReplayTicksPerSecond);
+        state             = mFollowSmoother.apply(view, tick / ReplayTicksPerSecond, settings.smoothing);
     }
     mFollowHeldPose = state;
     return state;
 }
 
 void ReplaySession::enforceReplayWorldTime() {
-    if (!mActive || !mReplayTime || !mReplayPlayer) return;
+    if (!mActive || !mReplayPlayer) return;
+    auto const time = effectiveReplayTime();
+    if (!time) return;
     auto& level = mReplayPlayer->getLevel();
-    if (level.getTime() != *mReplayTime) level.setTime(*mReplayTime);
+    if (level.getTime() != *time) level.setTime(*time);
+}
+
+void ReplaySession::setWorldOverrides(std::optional<int> timeOfDay, bool freezeTime, bool hideClouds) {
+    mTimeOfDayOverride  = timeOfDay;
+    mFreezeTimeOverride = freezeTime;
+    mHideClouds         = hideClouds;
+}
+
+std::optional<int> ReplaySession::effectiveReplayTime() const {
+    if (!mTimeOfDayOverride) return mReplayTime;
+    constexpr int ticksPerDay = 24000;
+    // The recorded day keeps the moon phase; only the time within the day is replaced.
+    int const day = mReplayTime && *mReplayTime > 0 ? *mReplayTime / ticksPerDay * ticksPerDay : 0;
+    return day + *mTimeOfDayOverride + (mFreezeTimeOverride ? 0 : mCurrentTick);
+}
+
+void ReplaySession::applyCloudOverride() {
+    if (mHideClouds == mSavedRenderClouds.has_value()) return;
+    if (!mHideClouds) {
+        restoreClouds();
+        return;
+    }
+    auto       client = ll::service::getClientInstance();
+    auto const option = renderCloudsOption();
+    if (!client || !option) return;
+    mSavedRenderClouds = client->getOptions().getRenderClouds();
+    option->set(false, false);
+}
+
+void ReplaySession::restoreClouds() {
+    auto const saved = std::exchange(mSavedRenderClouds, std::nullopt);
+    if (!saved) return;
+    if (auto const option = renderCloudsOption()) option->set(*saved, false);
 }
 
 void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& rotation) {
@@ -2369,6 +2442,10 @@ void ReplaySession::finishSeek() {
     // Export seeks never tick the level during catch-up, so they always drop the particles it piled up.
     if (mExportSeekRequested) mSeekParticlesStale = true;
     mSeekTargetTick         = -1;
+    // The clips the catch-up started play from 0 on the client; resumeSeekAnimationClips sets their clocks.
+    mPendingAnimationClips.clear();
+    for (auto& [_, clip] : mSeekAnimationClips) mPendingAnimationClips.push_back(std::move(clip));
+    mSeekAnimationClips.clear();
     mExportSeekRequested    = false;
     mSnapMovementDuringSeek = false;
     mSeekFinishCount.fetch_add(1, std::memory_order_acq_rel);
@@ -2377,6 +2454,26 @@ void ReplaySession::finishSeek() {
     markReplayTickAdvanced();
     if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
     syncScreenPreviewAfterSeek();
+}
+
+void ReplaySession::resumeSeekAnimationClips() {
+    // Ticks to wait for the client to start a clip after the seek.
+    constexpr int MaxAttempts = 40;
+    if (mPendingAnimationClips.empty() || !mReplayPlayer) return;
+    auto& level = mReplayPlayer->getLevel();
+    std::erase_if(mPendingAnimationClips, [&](SeekAnimationClip& clip) {
+        auto* const actor     = level.getRuntimeEntity(clip.runtimeId, false);
+        auto const  component = actor ? actor->mAnimationComponent.get() : nullptr;
+        auto const  player    = component ? component->findAnimation(HashedString{clip.animation}) : nullptr;
+        if (!player || player->getAnimationType() != ActorAnimationType::SkeletalAnimation) {
+            return ++clip.attempts > MaxAttempts;
+        }
+        auto&       skeletal   = static_cast<ActorSkeletalAnimationPlayer&>(*player);
+        float const elapsed    = static_cast<float>(mCurrentTick - clip.startTick) / 20.0f;
+        skeletal.mAnimTime     = elapsed;
+        skeletal.mLastAnimTime = elapsed;
+        return true;
+    });
 }
 
 // Per-action snapping misses entities that never moved during catch-up, so settle every recorded one here.
@@ -2423,6 +2520,8 @@ void ReplaySession::beginSeek(int targetTick) {
     mIsPaused                = true;
     mPlaybackTickAccumulator = 0.0f;
     mSeekTargetTick          = targetTick;
+    mSeekAnimationClips.clear();
+    mPendingAnimationClips.clear();
     mSeekWindowEntered       = false;
     mSeekTickResuming        = false;
     mSnapMovementDuringSeek  = !exportSeek || mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
@@ -2495,7 +2594,9 @@ void ReplaySession::tick() {
         } levelFreeze{*this};
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
-        if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
+        if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
+        applyCloudOverride();
+        resumeSeekAnimationClips();
         updateScreenPreview();
         syncFollowedPlayerHud();
 
@@ -2741,6 +2842,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mReaders.clear();
     mSnapshotContexts.clear();
     mDimensionTransitionTicks.clear();
+    mCommandCameraSamples.clear();
     mChunkPackets.clear();
     mInlineLevelChunkPacketIndices.clear();
     mInlineSubChunkPacketIndices.clear();
@@ -2766,6 +2868,10 @@ bool ReplaySession::init(std::filesystem::path filePath) {
         }
         for (int offset : reader->readDimensionTransitionTickOffsets()) {
             recordTransition(chunkStartTick + static_cast<int64_t>(offset));
+        }
+        for (auto sample : reader->readCommandCameraSamples()) {
+            sample.tickOffset = static_cast<int>(chunkStartTick) + sample.tickOffset;
+            mCommandCameraSamples.push_back(sample);
         }
         mReaders.emplace_back(std::move(reader));
         mSnapshotContexts.emplace_back(context);
@@ -4688,10 +4794,8 @@ void ReplaySession::handleNextTick() {
     visuals::commitReplayEntityPoses(static_cast<int64_t>(mCurrentTick) + 1);
     mCurrentTick += 1;
     integration::pushReplayClock(mCurrentTick, false);
-    if (mReplayTime) {
-        ++*mReplayTime;
-        if (mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
-    }
+    if (mReplayTime) ++*mReplayTime;
+    if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
     updateReplaySubjectPosture(false);
 }
 
@@ -5688,6 +5792,34 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     if (packetId == MinecraftPacketIds::SetTime) {
         mReplayTime = static_cast<SetTimePacket const&>(*packet).mTime;
     }
+    // Recordings made before the recorder remapped AnimateEntity still name the recording player by its live
+    // runtime ID, which matches no replay entity; point those at the recorded player.
+    if (packetId == MinecraftPacketIds::TriggerAnimation && mReplayStartGame) {
+        auto const liveRuntimeId = mReplayStartGame->mRuntimeId->rawID;
+        for (auto& id : *static_cast<AnimateEntityPacket&>(*packet).mRuntimeIds) {
+            if (id.rawID == liveRuntimeId) id = ActorRuntimeID{record::RecordedPlayerRuntimeIdValue};
+        }
+    }
+    if (packetId == MinecraftPacketIds::TriggerAnimation && mSeekTargetTick >= 0) {
+        auto const& animate = static_cast<AnimateEntityPacket&>(*packet);
+        for (auto const& id : *animate.mRuntimeIds) {
+            mSeekAnimationClips.insert_or_assign(id.rawID, SeekAnimationClip{id, *animate.mAnimation, mCurrentTick});
+        }
+    }
+    // A recording with command camera samples shows those views as camera tracks; replaying the instructions would
+    // take the view from the free camera and from the tracks. Fades stay: they darken the picture, not move it. A
+    // spline instruction is dropped whole: its destructor is not exported, so it cannot be cleared here.
+    if (packetId == MinecraftPacketIds::CameraInstruction && !mCommandCameraSamples.empty()) {
+        auto& instruction = *static_cast<CameraInstructionPacket&>(*packet).mCameraInstruction;
+        if (!instruction.mFade->has_value() || instruction.mSpline->has_value()) return true;
+        instruction.mAttachToEntity->reset();
+        instruction.mFieldOfView->reset();
+        instruction.mSet->reset();
+        instruction.mTarget->reset();
+        instruction.mClear->reset();
+        instruction.mDetachFromEntity->reset();
+        instruction.mRemoveTarget->reset();
+    }
 
     if (packetId == MinecraftPacketIds::PlayerList) {
         auto& playerList = static_cast<PlayerListPacket&>(*packet);
@@ -5723,6 +5855,9 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 if (!addEntry->mSkin->mSkinImpl) continue;
             }
             addEntry->mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
+            // Recorded skins are the recording's own content, so an imported custom skin (untrusted) is shown as
+            // recorded instead of falling back to Steve/Alex.
+            addEntry->mSkin->mSkinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
         }
         if (subjectLeft) {
             getLogger().debug("replay subject left uuid={} tick={} fallback=recorder", choice, mCurrentTick);
@@ -5740,6 +5875,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             return true;
         }
         skinImpl->mObject.mIsPrimaryUser = false;
+        skinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
     }
 
     if (packetId == MinecraftPacketIds::ChangeDimension) {

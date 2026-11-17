@@ -241,6 +241,42 @@
                     "hermite": "Hermite",
                     "cubicBezier": "Cubic Bezier"
                 },
+                "easingPreset": "Easing preset",
+                "easingPresets": "Easing presets",
+                "easingPresetNone": "None",
+                "easingPresetCustom": "Custom curve",
+                "easing": {
+                    "sine": "Sine",
+                    "quad": "Quad",
+                    "cubic": "Cubic",
+                    "quart": "Quart",
+                    "quint": "Quint",
+                    "expo": "Expo",
+                    "circ": "Circ",
+                    "back": "Back",
+                    "in": "In",
+                    "out": "Out",
+                    "inOut": "In-Out"
+                },
+                "follow": "Follow",
+                "followStyle": "Framing",
+                "followStyleBehind": "Behind",
+                "followStyleShoulder": "Over the shoulder",
+                "followStyleOrbit": "Orbit",
+                "followStyleTripod": "Tripod",
+                "followDistance": "Distance (blocks)",
+                "followHeight": "Height (blocks)",
+                "followSide": "Side (blocks)",
+                "followSideHint": "Positive is the right shoulder, negative the left.",
+                "followOrbitSpeed": "Orbit speed",
+                "followOrbitStart": "Start angle",
+                "followOrbitHint": "Where the camera is at the track's first key: 0° south of the player, 90° west. Positive speeds turn south → west → north.",
+                "followTripodAt": "Camera at {} {} {}",
+                "followTripodUnset": "No position yet: frames like Behind until one is set.",
+                "followTripodSet": "Set to current view",
+                "followTripodHint": "Takes the position of the camera you are looking through now; fly the free camera there first.",
+                "followSmoothing": "Smoothing",
+                "followSmoothingHint": "Seconds the camera takes to catch up with quick turns and jumps; 0 is rigid.",
                 "categoryName": {
                     "default": "Default",
                     "players": "Players",
@@ -490,13 +526,24 @@
                 "previewVolume": "Volume",
                 "previewSilentPaused": "Silent while paused",
                 "previewSilentPausedHint": "Sounds triggered while the replay is paused or seeking are not played.",
-                "previewAudioHint": "Preview only. Exported audio is set in the export dialog."
+                "previewAudioHint": "Preview only. Exported audio is set in the export dialog.",
+                "world": "World",
+                "worldOverrideTime": "Override time of day",
+                "worldFreezeTime": "Freeze time",
+                "worldFreezeTimeHint": "Off: time runs on from the set time at the start of the replay.",
+                "worldHideClouds": "Hide clouds",
+                "worldOverrideFog": "Override fog",
+                "worldFogStart": "Fog start",
+                "worldFogEnd": "Fog end",
+                "worldFogDistanceHint": "Percent of the render distance. The world's fog is about 92% to 100%; ends past 100% thin it out until it is gone.",
+                "worldHint": "Saved in the project. Applies to the preview and to exported video."
             },
             "defaults": {
                 "camera": "Camera {}",
                 "firstPersonCamera": "First person {}",
                 "thirdPersonCamera": "Third person {}",
-                "marker": "Marker {}"
+                "marker": "Marker {}",
+                "recordedCamera": "Recorded camera {}"
             }
         }
     }

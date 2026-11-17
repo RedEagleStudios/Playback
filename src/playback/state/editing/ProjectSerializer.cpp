@@ -2,6 +2,7 @@
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 
@@ -143,15 +144,15 @@ json toJson(CameraEntity const& camera) {
     }
 
     json result{
-        {"id",                camera.id               },
-        {"name",              camera.name             },
+        {"id",                camera.id                    },
+        {"name",              camera.name                  },
         {"kind",              static_cast<int>(camera.kind)},
-        {"enabled",           camera.enabled          },
-        {"locked",            camera.locked           },
-        {"bindingEntityUuid", camera.bindingEntityUuid},
-        {"bindingMode",       camera.bindingMode      },
-        {"bindingDamping",    camera.bindingDamping   },
-        {"keys",              std::move(keys)         }
+        {"enabled",           camera.enabled               },
+        {"locked",            camera.locked                },
+        {"bindingEntityUuid", camera.bindingEntityUuid     },
+        {"bindingMode",       camera.bindingMode           },
+        {"bindingDamping",    camera.bindingDamping        },
+        {"keys",              std::move(keys)              }
     };
     if (camera.shake) {
         result["shake"] = {
@@ -167,6 +168,19 @@ json toJson(CameraEntity const& camera) {
             {"min",     toJson(camera.limiter->min)},
             {"max",     toJson(camera.limiter->max)},
             {"enabled", camera.limiter->enabled    }
+        };
+    }
+    if (camera.kind == CameraTrackKind::ThirdPerson) {
+        result["follow"] = {
+            {"style",      static_cast<int>(camera.follow.style)},
+            {"distance",   camera.follow.distance               },
+            {"height",     camera.follow.height                 },
+            {"side",       camera.follow.side                   },
+            {"orbitSpeed", camera.follow.orbitSpeed             },
+            {"orbitStart", camera.follow.orbitStart             },
+            {"tripod",     toJson(camera.follow.tripod)         },
+            {"hasTripod",  camera.follow.hasTripod              },
+            {"smoothing",  camera.follow.smoothing              }
         };
     }
     return result;
@@ -197,6 +211,19 @@ CameraEntity cameraFrom(json const& node) {
             finiteOr(*shake, "rotationAmplitude", 0.0f),
             finiteOr(*shake, "frequency", 1.0f)
         };
+    }
+    if (auto const* follow = objectAt(node, "follow")) {
+        FollowSettings const defaults;
+        camera.follow.style    = enumOr(*follow, "style", defaults.style, static_cast<int>(model::FollowStyle::Tripod));
+        camera.follow.distance = finiteOr(*follow, "distance", defaults.distance);
+        camera.follow.height   = finiteOr(*follow, "height", defaults.height);
+        camera.follow.side     = finiteOr(*follow, "side", defaults.side);
+        camera.follow.orbitSpeed = finiteOr(*follow, "orbitSpeed", defaults.orbitSpeed);
+        camera.follow.orbitStart = finiteOr(*follow, "orbitStart", defaults.orbitStart);
+        camera.follow.tripod     = vec3From(*follow, "tripod", defaults.tripod);
+        camera.follow.hasTripod  = boolOr(*follow, "hasTripod", defaults.hasTripod);
+        camera.follow.smoothing  = finiteOr(*follow, "smoothing", defaults.smoothing);
+        camera.follow            = camera.follow.sanitized();
     }
     if (auto const* limiter = objectAt(node, "limiter")) {
         camera.limiter = CameraLimiter{
@@ -384,14 +411,14 @@ std::string serializeProject(model::EditorStateExt const& project) {
     for (auto const& transition : project.transitions) transitions.push_back(toJson(transition));
 
     json const document{
-        {"formatVersion",       kProjectFormatVersion      },
-        {"projectName",         project.projectName        },
-        {"replayPath",          project.projectPath        },
-        {"totalTicks",          project.totalTicks         },
-        {"currentTick",         project.currentTick        },
-        {"fps",                 project.fps                },
-        {"activeVideoTrackIdx", project.activeVideoTrackIdx},
-        {"cameras",             std::move(cameras)         },
+        {"formatVersion",             kProjectFormatVersion            },
+        {"projectName",               project.projectName              },
+        {"replayPath",                project.projectPath              },
+        {"totalTicks",                project.totalTicks               },
+        {"currentTick",               project.currentTick              },
+        {"fps",                       project.fps                      },
+        {"activeVideoTrackIdx",       project.activeVideoTrackIdx      },
+        {"cameras",                   std::move(cameras)               },
         {"worldActor",
          json{
              {"id", project.worldActor.id},
@@ -399,10 +426,21 @@ std::string serializeProject(model::EditorStateExt const& project) {
              {"totalTicks", project.worldActor.totalTicks},
              {"segments", std::move(worldSegments)},
              {"subActors", std::move(subActors)}
-         }                                                 },
-        {"markers",             std::move(markers)         },
-        {"videoTracks",         std::move(videoTracks)     },
-        {"transitions",         std::move(transitions)     }
+         }                                                             },
+        {"markers",                   std::move(markers)               },
+        {"videoTracks",               std::move(videoTracks)           },
+        {"transitions",               std::move(transitions)           },
+        {"world",
+         json{
+             {"overrideTime", project.world.overrideTime},
+             {"timeOfDay", project.world.timeOfDay},
+             {"freezeTime", project.world.freezeTime},
+             {"hideClouds", project.world.hideClouds},
+             {"overrideFog", project.world.overrideFog},
+             {"fogStart", project.world.fogStart},
+             {"fogEnd", project.world.fogEnd}
+         }                                                             },
+        {"recordedCameraTracksAdded", project.recordedCameraTracksAdded}
     };
     return document.dump(2);
 }
@@ -470,6 +508,18 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
             if (entry.is_object()) loaded.transitions.push_back(transitionFrom(entry));
         }
     }
+    if (auto const* world = objectAt(document, "world")) {
+        model::WorldSettings const defaults;
+        loaded.world.overrideTime = boolOr(*world, "overrideTime", defaults.overrideTime);
+        loaded.world.timeOfDay    = intOr(*world, "timeOfDay", defaults.timeOfDay);
+        loaded.world.freezeTime   = boolOr(*world, "freezeTime", defaults.freezeTime);
+        loaded.world.hideClouds   = boolOr(*world, "hideClouds", defaults.hideClouds);
+        loaded.world.overrideFog  = boolOr(*world, "overrideFog", defaults.overrideFog);
+        loaded.world.fogStart     = finiteOr(*world, "fogStart", defaults.fogStart);
+        loaded.world.fogEnd       = finiteOr(*world, "fogEnd", defaults.fogEnd);
+        loaded.world              = loaded.world.sanitized();
+    }
+    loaded.recordedCameraTracksAdded = boolOr(document, "recordedCameraTracksAdded", false);
 
     project = std::move(loaded);
     return true;

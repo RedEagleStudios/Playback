@@ -1,6 +1,7 @@
 ﻿#include "TimelinePanel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/EasingPresetPicker.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/TimelineScale.h"
 #include "playback/editor/ui/components/Widgets.h"
@@ -20,6 +21,7 @@
 
 namespace playback::editor::ui {
 using namespace playback::state;
+using state::editing::model::findEasingPreset;
 
 using namespace ll::i18n_literals;
 
@@ -979,6 +981,24 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     "playback.refactorEditor.details.interpolationType.cubicBezier"_tr().c_str(),
                     CameraInterpolationType::CubicBezier
                 );
+                ImGui::Separator();
+                if (ImGui::BeginMenu("playback.refactorEditor.details.easingPresets"_tr().c_str())) {
+                    auto const current = !group && key->interpolationType == CameraInterpolationType::CubicBezier
+                                           ? findEasingPreset(key->bezierCtrl1, key->bezierCtrl2)
+                                           : std::nullopt;
+                    if (auto const preset = drawEasingPresetMenus(current)) {
+                        EditorAction action{EditorActionType::SetKeyframesInterpolation};
+                        action.kind           = static_cast<int>(CameraInterpolationType::CubicBezier);
+                        action.bezierControls = std::array{preset->control1, preset->control2};
+                        if (group) action.keyframeRefs = selectedKeyframeRefs(ctx);
+                        else
+                            action.keyframeRefs = {
+                                {camera->id, mKeyframeMenuTick, std::nullopt}
+                            };
+                        ctx.submitAction(std::move(action));
+                    }
+                    ImGui::EndMenu();
+                }
                 ImGui::EndMenu();
             }
             if (ImGui::MenuItem(

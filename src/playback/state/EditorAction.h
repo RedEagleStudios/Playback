@@ -2,8 +2,11 @@
 
 #include "playback/exporting/ExportTypes.h"
 #include "playback/state/editing/models/CameraKeyframe.h"
+#include "playback/state/editing/models/FollowSettings.h"
 #include "playback/state/editing/models/MathTypes.h"
+#include "playback/state/editing/models/WorldSettings.h"
 
+#include <array>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -54,6 +57,7 @@ enum class EditorActionType {
     SetKeyframeSubject,
     SetCameraEnabled,
     SetCameraLocked,
+    SetCameraFollow,
     RenameCamera,
     ClearCameraKeyframes,
     DeleteCamera,
@@ -71,6 +75,9 @@ enum class EditorActionType {
     DeleteMarker,
     MoveMarker,
     RenameMarker,
+    SetWorldSettings,
+    // While a world slider is dragged: shown live, not an undo step. Without worldSettings it ends the preview.
+    PreviewWorldSettings,
 };
 
 struct EditorAction {
@@ -93,6 +100,12 @@ struct EditorAction {
     std::map<std::string, std::string>       details;
     // Batch keyframe edits (multi-select move / delete / interpolation / paste).
     std::vector<editing::model::KeyframeRef> keyframeRefs;
+    // SetWorldSettings: the project's new world settings. PreviewWorldSettings: the dragged value, or none to end it.
+    std::optional<editing::model::WorldSettings> worldSettings;
+    // SetKeyframesInterpolation: Bézier control points to set with it (an easing preset); none keeps the keys' own.
+    std::optional<std::array<editing::model::Vec2, 2>> bezierControls;
+    // SetCameraFollow: the third-person track's new follow settings.
+    std::optional<editing::model::FollowSettings> followSettings;
 };
 
 } // namespace playback::state

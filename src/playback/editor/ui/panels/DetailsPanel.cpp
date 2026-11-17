@@ -1,12 +1,14 @@
 ﻿#include "DetailsPanel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/EasingPresetPicker.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/PropertyControls.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/integration/OptiPistonBridge.h"
+#include "playback/keyframe/ClientCameraCapture.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -16,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <utility>
 
 namespace playback::editor::ui {
 using namespace playback::state;
@@ -53,6 +56,21 @@ std::string interpolationName(state::editing::model::CameraInterpolationType int
     default:
         return "playback.refactorEditor.details.interpolationType.smooth"_tr();
     }
+}
+
+// The key's easing preset: only a CubicBezier key whose control points match one has it.
+std::optional<std::size_t> keyEasingPreset(state::editing::model::CameraKeyframe const& key) {
+    if (key.interpolationType != state::editing::model::CameraInterpolationType::CubicBezier) return std::nullopt;
+    return state::editing::model::findEasingPreset(key.bezierCtrl1, key.bezierCtrl2);
+}
+
+std::string easingPresetPreview(state::editing::model::CameraKeyframe const& key) {
+    if (key.interpolationType != state::editing::model::CameraInterpolationType::CubicBezier) {
+        return "playback.refactorEditor.details.easingPresetNone"_tr();
+    }
+    if (auto const preset = keyEasingPreset(key))
+        return easingPresetName(state::editing::model::EasingPresets[*preset]);
+    return "playback.refactorEditor.details.easingPresetCustom"_tr();
 }
 
 std::string categoryName(state::editing::model::SubActorCategory category) {
@@ -482,6 +500,7 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
             }
             property::endSection();
         }
+        if (camera->kind == state::editing::model::CameraTrackKind::ThirdPerson) drawFollowSection(ctx, *camera);
         return true;
     }
     return false;
@@ -497,6 +516,9 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
     bool                                            mixed   = false;
     int                                             tracks  = 0;
     std::string                                     lastTrack;
+    std::optional<std::string>                      sharedPresetPreview;
+    std::optional<std::size_t>                      sharedPreset;
+    bool                                            presetMixed = false;
     for (auto const& entry : selection.keyframes()) {
         refs.push_back({entry.trackId, entry.tick, std::nullopt});
         if (entry.trackId != lastTrack) {
@@ -510,6 +532,13 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
         int const type = static_cast<int>(key->second.interpolationType);
         if (!shared) shared = type;
         else if (*shared != type) mixed = true;
+        auto const preview = easingPresetPreview(key->second);
+        if (!sharedPresetPreview) {
+            sharedPresetPreview = preview;
+            sharedPreset        = keyEasingPreset(key->second);
+        } else if (*sharedPresetPreview != preview) {
+            presetMixed = true;
+        }
     }
 
     if (property::beginSection("playback.refactorEditor.details.multiKeyframe"_tr().c_str())) {
@@ -537,6 +566,23 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                 }
             }
             widgets::endCombo();
+        }
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.easingPreset"_tr().c_str());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1.0f);
+        std::string const presetPreview =
+            presetMixed || !sharedPresetPreview ? "playback.refactorEditor.details.mixed"_tr() : *sharedPresetPreview;
+        if (auto const picked = drawEasingPresetCombo(
+                "##batch-easing-preset",
+                presetPreview.c_str(),
+                presetMixed ? std::nullopt : sharedPreset
+            )) {
+            EditorAction action{EditorActionType::SetKeyframesInterpolation};
+            action.keyframeRefs   = refs;
+            action.kind           = static_cast<int>(state::editing::model::CameraInterpolationType::CubicBezier);
+            action.bezierControls = std::array{picked->control1, picked->control2};
+            ctx.submitAction(std::move(action));
         }
         property::separator();
         if (property::actionButton(
@@ -680,6 +726,27 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                             }
                         }
                         widgets::endCombo();
+                    }
+
+                    auto const preset = keyEasingPreset(key->second);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.easingPreset"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (auto const picked = drawEasingPresetCombo(
+                            "##easing-preset",
+                            easingPresetPreview(key->second).c_str(),
+                            preset
+                        )) {
+                        EditorAction action{EditorActionType::SetKeyframesInterpolation};
+                        action.keyframeRefs = {
+                            {camera->id, originalTick, std::nullopt}
+                        };
+                        action.kind = static_cast<int>(state::editing::model::CameraInterpolationType::CubicBezier);
+                        action.bezierControls = std::array{picked->control1, picked->control2};
+                        submit(std::move(action));
                     }
                 }
                 ImGui::EndTable();
@@ -960,6 +1027,8 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
         property::endSection();
     }
 
+    drawWorldSection(ctx);
+
     ImGui::EndDisabled();
 }
 
@@ -1035,6 +1104,231 @@ void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {
         }
         property::endSection();
     }
+}
+
+void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
+    using editing::model::WorldSettings;
+    if (!ctx.state.project) return;
+    if (!property::beginSection("playback.refactorEditor.inspector.world"_tr().c_str())) return;
+
+    auto const submit = [&ctx](EditorActionType type, std::optional<WorldSettings> settings) {
+        EditorAction action{type};
+        action.worldSettings = settings;
+        ctx.submitAction(std::move(action));
+    };
+    // A dragged slider or colour shows live and becomes one undo step once no control is active any more.
+    WorldSettings world  = mWorldDraft.value_or(ctx.state.project->world);
+    auto const    commit = [&](WorldSettings const& edited) {
+        mWorldDraft.reset();
+        submit(EditorActionType::SetWorldSettings, edited);
+    };
+    auto const drag = [&](bool changed, WorldSettings const& edited) {
+        if (!changed) return;
+        mWorldDraft = edited;
+        submit(EditorActionType::PreviewWorldSettings, edited);
+    };
+
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldOverrideTime"_tr() + "##set-override-time").c_str(),
+            &world.overrideTime
+        ))
+        commit(world);
+
+    ImGui::BeginDisabled(!world.overrideTime);
+    int timeOfDay = world.timeOfDay;
+    // Minecraft's day starts at 06:00: 1000 ticks are one hour.
+    int const  minutes = (timeOfDay * 60 / 1000 + 6 * 60) % (24 * 60);
+    std::array clock{'0', '0', ':', '0', '0', '\0'};
+    std::snprintf(clock.data(), clock.size(), "%02d:%02d", minutes / 60, minutes % 60);
+    ImGui::SetNextItemWidth(-1.0f);
+    bool changed = ImGui::SliderInt(
+        "##set-time-of-day",
+        &timeOfDay,
+        0,
+        WorldSettings::TicksPerDay - 1,
+        clock.data(),
+        ImGuiSliderFlags_AlwaysClamp
+    );
+    auto edited      = world;
+    edited.timeOfDay = timeOfDay;
+    drag(changed, edited);
+
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldFreezeTime"_tr() + "##set-freeze-time").c_str(),
+            &world.freezeTime
+        ))
+        commit(world);
+    widgets::itemTooltip("playback.refactorEditor.inspector.worldFreezeTimeHint"_tr().c_str());
+    ImGui::EndDisabled();
+
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldHideClouds"_tr() + "##set-hide-clouds").c_str(),
+            &world.hideClouds
+        ))
+        commit(world);
+
+    property::separator();
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldOverrideFog"_tr() + "##set-override-fog").c_str(),
+            &world.overrideFog
+        ))
+        commit(world);
+    ImGui::BeginDisabled(!world.overrideFog);
+    // Shown in percent of the render distance; stored as fractions.
+    float const maxPercent = WorldSettings::MaxFogDistance * 100.0f;
+    float       start      = world.fogStart * 100.0f;
+    float       end        = world.fogEnd * 100.0f;
+    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.worldFogStart"_tr().c_str());
+    ImGui::SetNextItemWidth(-1.0f);
+    changed = ImGui::SliderFloat("##set-fog-start", &start, 0.0f, maxPercent, "%.0f%%", ImGuiSliderFlags_AlwaysClamp);
+    widgets::itemTooltip("playback.refactorEditor.inspector.worldFogDistanceHint"_tr().c_str());
+    edited          = world;
+    edited.fogStart = start / 100.0f;
+    edited.fogEnd   = std::max(edited.fogEnd, edited.fogStart);
+    drag(changed, edited);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.worldFogEnd"_tr().c_str());
+    ImGui::SetNextItemWidth(-1.0f);
+    changed = ImGui::SliderFloat("##set-fog-end", &end, 0.0f, maxPercent, "%.0f%%", ImGuiSliderFlags_AlwaysClamp);
+    widgets::itemTooltip("playback.refactorEditor.inspector.worldFogDistanceHint"_tr().c_str());
+    edited          = world;
+    edited.fogEnd   = end / 100.0f;
+    edited.fogStart = std::min(edited.fogStart, edited.fogEnd);
+    drag(changed, edited);
+
+    ImGui::EndDisabled();
+
+    if (mWorldDraft && !ImGui::IsAnyItemActive()) commit(*mWorldDraft);
+
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.worldHint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+    property::endSection();
+}
+
+void DetailsPanel::drawFollowSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera) {
+    using editing::model::FollowSettings;
+    using editing::model::FollowStyle;
+    if (!property::beginSection("playback.refactorEditor.details.follow"_tr().c_str())) return;
+
+    bool const     draft  = mFollowDraft && mFollowDraft->first == camera.id;
+    FollowSettings follow = draft ? mFollowDraft->second : camera.follow;
+    auto const     commit = [&](FollowSettings const& edited) {
+        mFollowDraft.reset();
+        EditorAction action{EditorActionType::SetCameraFollow};
+        action.id             = camera.id;
+        action.followSettings = edited;
+        ctx.submitAction(std::move(action));
+    };
+    // A slider keeps its value here while dragged and becomes one undo step once no control is active any more.
+    auto const slider =
+        [&](std::string const& label, char const* id, float& value, float low, float high, char const* format) {
+            ImGui::TextDisabled("%s", label.c_str());
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::SliderFloat(id, &value, low, high, format, ImGuiSliderFlags_AlwaysClamp)) {
+                mFollowDraft = {camera.id, follow};
+            }
+        };
+
+    ImGui::BeginDisabled(camera.locked);
+    std::array const styles{
+        "playback.refactorEditor.details.followStyleBehind"_tr(),
+        "playback.refactorEditor.details.followStyleShoulder"_tr(),
+        "playback.refactorEditor.details.followStyleOrbit"_tr(),
+        "playback.refactorEditor.details.followStyleTripod"_tr(),
+    };
+    auto const current = static_cast<std::size_t>(follow.style);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.followStyle"_tr().c_str());
+    ImGui::SetNextItemWidth(-1.0f);
+    if (widgets::beginCombo("##follow-style", styles[current].c_str())) {
+        for (std::size_t index = 0; index < styles.size(); ++index) {
+            if (ImGui::Selectable(styles[index].c_str(), index == current)) {
+                follow.style = static_cast<FollowStyle>(index);
+                commit(follow);
+            }
+        }
+        widgets::endCombo();
+    }
+
+    if (follow.style != FollowStyle::Tripod) {
+        slider(
+            "playback.refactorEditor.details.followDistance"_tr(),
+            "##follow-distance",
+            follow.distance,
+            0.0f,
+            FollowSettings::MaxDistance,
+            "%.1f"
+        );
+        slider(
+            "playback.refactorEditor.details.followHeight"_tr(),
+            "##follow-height",
+            follow.height,
+            -FollowSettings::MaxHeight,
+            FollowSettings::MaxHeight,
+            "%.1f"
+        );
+    }
+    if (follow.style == FollowStyle::Shoulder) {
+        slider(
+            "playback.refactorEditor.details.followSide"_tr(),
+            "##follow-side",
+            follow.side,
+            -FollowSettings::MaxSide,
+            FollowSettings::MaxSide,
+            "%.2f"
+        );
+        widgets::itemTooltip("playback.refactorEditor.details.followSideHint"_tr().c_str());
+    }
+    if (follow.style == FollowStyle::Orbit) {
+        slider(
+            "playback.refactorEditor.details.followOrbitSpeed"_tr(),
+            "##follow-orbit-speed",
+            follow.orbitSpeed,
+            -FollowSettings::MaxOrbitSpeed,
+            FollowSettings::MaxOrbitSpeed,
+            "%.0f°/s"
+        );
+        slider(
+            "playback.refactorEditor.details.followOrbitStart"_tr(),
+            "##follow-orbit-start",
+            follow.orbitStart,
+            -180.0f,
+            180.0f,
+            "%.0f°"
+        );
+        widgets::itemTooltip("playback.refactorEditor.details.followOrbitHint"_tr().c_str());
+    }
+    if (follow.style == FollowStyle::Tripod) {
+        std::string const where = follow.hasTripod ? "playback.refactorEditor.details.followTripodAt"_tr(
+                                                         static_cast<int>(std::floor(follow.tripod.x)),
+                                                         static_cast<int>(std::floor(follow.tripod.y)),
+                                                         static_cast<int>(std::floor(follow.tripod.z))
+                                                     )
+                                                   : "playback.refactorEditor.details.followTripodUnset"_tr();
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", where.c_str());
+        ImGui::PopTextWrapPos();
+        if (property::actionButton("playback.refactorEditor.details.followTripodSet"_tr().c_str())) {
+            if (auto const view = keyframe::captureClientCamera()) {
+                follow.tripod    = {view->x, view->y, view->z};
+                follow.hasTripod = true;
+                commit(follow);
+            }
+        }
+        widgets::itemTooltip("playback.refactorEditor.details.followTripodHint"_tr().c_str());
+    }
+    slider(
+        "playback.refactorEditor.details.followSmoothing"_tr(),
+        "##follow-smoothing",
+        follow.smoothing,
+        0.0f,
+        FollowSettings::MaxSmoothing,
+        "%.2f s"
+    );
+    widgets::itemTooltip("playback.refactorEditor.details.followSmoothingHint"_tr().c_str());
+    ImGui::EndDisabled();
+
+    if (mFollowDraft && mFollowDraft->first == camera.id && !ImGui::IsAnyItemActive()) commit(mFollowDraft->second);
+    property::endSection();
 }
 
 void DetailsPanel::drawOptiPistonSection() {

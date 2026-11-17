@@ -2,8 +2,6 @@
 
 #include "CameraKeyframeHandler.h"
 
-#include <algorithm>
-
 namespace playback::keyframe {
 
 namespace {
@@ -28,7 +26,7 @@ CameraRenderState CameraKeyframeChange::toRenderState() const noexcept {
 
 CameraKeyframeChange
 CameraKeyframeChange::interpolate(CameraKeyframeChange const& left, CameraKeyframeChange const& right, float amount) {
-    amount = std::clamp(amount, 0.0f, 1.0f);
+    // Not clamped: an overshooting easing curve passes amounts outside 0..1; the key span bounds every other caller.
     return {
         {
          left.position.x + (right.position.x - left.position.x) * amount,

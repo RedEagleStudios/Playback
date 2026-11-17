@@ -3,7 +3,9 @@
 #include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/IEditCommand.h"
 #include "playback/state/editing/models/SubActor.h"
+#include "playback/state/editing/models/WorldSettings.h"
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,6 +42,8 @@ public:
     createSetCameraKeyframeSubject(const std::string& id, int tick, const std::string& subject);
     static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
     static std::unique_ptr<model::IEditCommand> createSetCameraLocked(const std::string& id, bool locked);
+    static std::unique_ptr<model::IEditCommand>
+    createSetCameraFollow(const std::string& id, model::FollowSettings const& follow);
     static std::unique_ptr<model::IEditCommand> createRenameCamera(const std::string& id, const std::string& name);
     static std::unique_ptr<model::IEditCommand> createClearCameraKeyframes(const std::string& id);
     static std::unique_ptr<model::IEditCommand>
@@ -47,8 +51,11 @@ public:
 
     static std::unique_ptr<model::IEditCommand> createMoveCameraKeyframes(std::vector<model::KeyframeRef> refs, int delta);
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframes(std::vector<model::KeyframeRef> refs);
-    static std::unique_ptr<model::IEditCommand>
-    createSetKeyframesInterpolation(std::vector<model::KeyframeRef> refs, model::CameraInterpolationType interpolation);
+    static std::unique_ptr<model::IEditCommand> createSetKeyframesInterpolation(
+        std::vector<model::KeyframeRef>                  refs,
+        model::CameraInterpolationType                   interpolation,
+        std::optional<std::array<model::Vec2, 2>> const& bezier = std::nullopt
+    );
     static std::unique_ptr<model::IEditCommand> createAddCameraKeyframes(std::vector<model::KeyframeRef> refs);
 
     static std::unique_ptr<model::IEditCommand>
@@ -56,6 +63,8 @@ public:
     static std::unique_ptr<model::IEditCommand> createDeleteMarker(const std::string& id);
     static std::unique_ptr<model::IEditCommand> createMoveMarker(const std::string& id, int tick);
     static std::unique_ptr<model::IEditCommand> createRenameMarker(const std::string& id, const std::string& label);
+
+    static std::unique_ptr<model::IEditCommand> createSetWorldSettings(model::WorldSettings const& settings);
 };
 
 } // namespace playback::state::editing::command

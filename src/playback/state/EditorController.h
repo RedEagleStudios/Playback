@@ -34,6 +34,8 @@ private:
     void               ensureProject(int totalTicks, std::string_view replayPath);
     void               applyEditorAction(EditorAction const& action);
     void               loadProjectForReplay(std::string_view replayPath);
+    // Once per project: the replay's recorded server-camera views (cutscenes) as keyframe tracks.
+    void               addRecordedCameraTracks();
     bool               saveProject(std::filesystem::path const& path);
     void               autosaveIfDue();
     void               flushProjectOnClose();
@@ -61,6 +63,8 @@ private:
     std::unique_ptr<exporting::ReplayExportDriver> mExportDriver;
     std::string                                    mActiveReplayPath;
     std::optional<std::string>                     mPreviewCameraId;
+    // A world slider being dragged (PreviewWorldSettings); shown instead of the project's until committed.
+    std::optional<state::editing::model::WorldSettings> mWorldPreview;
     int                                            mProjectTotalTicks{-1};
     bool                                           mExportTickedBeforeClientUpdate{};
     bool                                           mExportTickReentered{};

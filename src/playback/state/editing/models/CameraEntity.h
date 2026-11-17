@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "CameraKeyframe.h"
+#include "FollowSettings.h"
 
 #include <map>
 #include <optional>
@@ -36,6 +37,8 @@ struct CameraEntity {
     int                           bindingMode{};
     float                         bindingDamping{0.1f};
     bool                          locked{};
+    // Third-person tracks only: how the camera frames the subject.
+    FollowSettings follow;
 };
 
 [[nodiscard]] inline bool hasCameraSource(CameraEntity const& camera) noexcept { return !camera.keysByTick.empty(); }

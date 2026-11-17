@@ -167,12 +167,11 @@ std::vector<PlaybackSerializedGamePacket> ReplayReader::readConfigurationPackets
     }
 }
 
-std::vector<int> ReplayReader::readDimensionTransitionTickOffsets() {
+void ReplayReader::forEachAction(std::function<void(Action const&, std::string_view data, int tick)> const& visit) {
     auto const savedReadPointer = mStream.mReadPointer;
     mStream.mReadPointer        = mActionsOffset;
 
-    std::vector<int> transitionTicks;
-    int              currentTick = 0;
+    int currentTick = 0;
     try {
         while (mStream.mReadPointer < mStream.getWritePointer()) {
             auto const actionId = mStream.getVarInt().value();
@@ -190,20 +189,39 @@ std::vector<int> ReplayReader::readDimensionTransitionTickOffsets() {
 
             if (actionIt->second->name == ActionNextTick::getInstance().name) {
                 ++currentTick;
-            } else if (actionIt->second->name == ActionGamePacket::getInstance().name) {
-                std::string    data(mStream.mView.data() + mStream.mReadPointer, dataSize);
-                PlaybackBuffer packetData(data);
-                auto const     packetId = static_cast<MinecraftPacketIds>(packetData.getVarInt().value());
-                if (packetId == MinecraftPacketIds::ChangeDimension) transitionTicks.emplace_back(currentTick);
+            } else {
+                visit(*actionIt->second, {mStream.mView.data() + mStream.mReadPointer, dataSize}, currentTick);
             }
             mStream.mReadPointer += dataSize;
         }
         mStream.mReadPointer = savedReadPointer;
-        return transitionTicks;
     } catch (...) {
         mStream.mReadPointer = savedReadPointer;
         throw;
     }
+}
+
+std::vector<int> ReplayReader::readDimensionTransitionTickOffsets() {
+    std::vector<int> transitionTicks;
+    forEachAction([&](Action const& action, std::string_view bytes, int tick) {
+        if (action.name != ActionGamePacket::getInstance().name) return;
+        std::string    copy(bytes);
+        PlaybackBuffer data(copy);
+        auto const     packetId = static_cast<MinecraftPacketIds>(data.getVarInt().value());
+        if (packetId == MinecraftPacketIds::ChangeDimension) transitionTicks.emplace_back(tick);
+    });
+    return transitionTicks;
+}
+
+std::vector<ReplayReader::CommandCameraSample> ReplayReader::readCommandCameraSamples() {
+    std::vector<CommandCameraSample> samples;
+    forEachAction([&](Action const& action, std::string_view bytes, int tick) {
+        if (action.name != ActionCommandCamera::getInstance().name) return;
+        std::string    copy(bytes);
+        PlaybackBuffer data(copy);
+        samples.push_back({tick, ActionCommandCamera::read(data)});
+    });
+    return samples;
 }
 
 void ReplayReader::handleSnapshot(ReplaySession& session) {
