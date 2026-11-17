@@ -340,9 +340,9 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable, float
         std::snprintf(mExportName.data(), mExportName.size(), "%s", stamp.c_str());
     }
     mExportSettingsInitialized = true;
-    // An output of another shape than the frame would render a different view from the one framed in the viewport,
-    // so it is moved onto the frame's shape at the preset nearest its short side.
-    if (frameAspect > 0.0f && mExportWidth > 0 && mExportHeight > 0) {
+    // With Same as project an output of another shape than the frame would render a different view from the one framed
+    // in the viewport, so it is moved onto the frame's shape at the preset nearest its short side.
+    if (mExportMatchProject && frameAspect > 0.0f && mExportWidth > 0 && mExportHeight > 0) {
         float const outputAspect = static_cast<float>(mExportWidth) / static_cast<float>(mExportHeight);
         if (std::abs(outputAspect / frameAspect - 1.0f) > 0.01f) {
             int const shortSide = std::min(mExportWidth, mExportHeight);
@@ -951,16 +951,28 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             sectionHeader("playback.refactorEditor.export.capture"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-capture", labelWidth)) {
                 propertyLabel("playback.refactorEditor.export.resolution"_tr().c_str());
+                float const frameAspect = ctx.commands.videoAspectRatio();
                 inputClampedInt("##export-width", mExportWidth, 16, 16384, fieldWidth);
                 ImGui::SameLine();
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextDisabled("x");
                 ImGui::SameLine();
+                // Same as project: the height follows the width at the viewport's frame shape, kept even for H.264.
+                if (mExportMatchProject && frameAspect > 0.0f) {
+                    mExportHeight = std::max(16, static_cast<int>(std::lround(mExportWidth / frameAspect / 2.0)) * 2);
+                }
+                ImGui::BeginDisabled(mExportMatchProject);
                 inputClampedInt("##export-height", mExportHeight, 16, 16384, fieldWidth);
+                ImGui::EndDisabled();
+
+                propertyLabel(
+                    "playback.refactorEditor.export.sameAsProject"_tr().c_str(),
+                    "playback.refactorEditor.export.sameAsProjectHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-same-as-project", &mExportMatchProject);
 
                 // No preset is lit while the fields hold a custom size.
                 propertyLabel("playback.refactorEditor.export.resolutionPreset"_tr().c_str());
-                float const frameAspect = ctx.commands.videoAspectRatio();
                 int         presetIndex = -1;
                 for (int i = 0; i < IM_ARRAYSIZE(kResolutionPresetShortSides); ++i) {
                     auto const preset = resolutionPreset(kResolutionPresetShortSides[i], frameAspect);

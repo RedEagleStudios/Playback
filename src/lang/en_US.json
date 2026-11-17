@@ -336,6 +336,8 @@
                 "encodeSpeedHint": "MP4 only. Maps to the x264 presets medium / veryfast / ultrafast. Faster presets encode sooner but compress less efficiently at the same quality; Fastest makes much larger files.",
                 "crfHint": "MP4 only. 0-51, lower is higher quality and a larger file. 18 is close to visually lossless; 23 is roughly half the size.",
                 "resolutionPreset": "Presets",
+                "sameAsProject": "Same as project",
+                "sameAsProjectHint": "The height follows the width at the viewport's frame shape (9:16, 16:9, ...). Off, any size goes; a size taller or wider than the game window keeps the centre of the view and is scaled up from it.",
                 "ssaaHint": "Renders at a multiple of the output size and downsamples. Sharper edges, slower export. Levels that would exceed the GPU limit are disabled.",
                 "warmupHint": "Frames rendered and discarded before the first captured frame, so chunks and lighting can settle.",
                 "extraRendersHint": "Renders made and discarded before each frame is saved. 0 renders every frame once, which is right for most exports: ray tracing and Vibrant Visuals keep time with the replay, and the denoiser keeps accumulating across frames. Raise it when noise or trails remain after the lighting changes: extra renders stay on the same instant and only give the denoiser and light accumulation more passes, so those transitions finish sooner in the video. Each one costs a full render, so the export time multiplies.",

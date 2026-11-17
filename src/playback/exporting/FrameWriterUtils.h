@@ -81,10 +81,21 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
     bool const sameSize          = frame.width == targetWidth && frame.height == targetHeight;
     bool const integerDownsample = !sameSize && frame.width % targetWidth == 0 && frame.height % targetHeight == 0
                                 && frame.width / targetWidth == frame.height / targetHeight;
-    // Present hands back the swap-chain size, rarely an integer multiple of the output.
-    bool const boxDownsample =
-        !sameSize && !integerDownsample && frame.width >= targetWidth && frame.height >= targetHeight;
-    if (!sameSize && !integerDownsample && !boxDownsample) return false;
+    // Present hands back the swap-chain size: rarely an integer multiple of the output, and smaller than it or of
+    // another shape when the output is taller or wider than the window. The centre of the frame at the output's shape
+    // is kept, so nothing is stretched, then averaged down or filtered up to the output size.
+    bool const wider =
+        static_cast<uint64_t>(frame.width) * targetHeight > static_cast<uint64_t>(frame.height) * targetWidth;
+    uint32_t const cropWidth =
+        wider ? static_cast<uint32_t>(static_cast<uint64_t>(frame.height) * targetWidth / targetHeight) : frame.width;
+    uint32_t const cropHeight =
+        wider ? frame.height : static_cast<uint32_t>(static_cast<uint64_t>(frame.width) * targetHeight / targetWidth);
+    if (cropWidth == 0 || cropHeight == 0) return false;
+    uint32_t const cropLeft = (frame.width - cropWidth) / 2;
+    uint32_t const cropTop  = (frame.height - cropHeight) / 2;
+    bool const     boxDownsample =
+        !sameSize && !integerDownsample && cropWidth >= targetWidth && cropHeight >= targetHeight;
+    bool const upscale = !sameSize && !integerDownsample && !boxDownsample;
 
     auto output = visuals::framePixelBufferPool().acquire(static_cast<size_t>(targetBytes));
     if (integerDownsample) {
@@ -159,14 +170,14 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
 
         std::function<void(uint32_t, uint32_t)> const rows = [&](uint32_t firstRow, uint32_t lastRow) {
             for (uint32_t y = firstRow; y < lastRow; ++y) {
-                auto const sourceTop = static_cast<uint64_t>(y) * frame.height / targetHeight;
+                auto const sourceTop = cropTop + static_cast<uint64_t>(y) * cropHeight / targetHeight;
                 auto const sourceBottom =
-                    std::max(sourceTop + 1, static_cast<uint64_t>(y + 1) * frame.height / targetHeight);
+                    std::max(sourceTop + 1, cropTop + static_cast<uint64_t>(y + 1) * cropHeight / targetHeight);
                 auto* out = reinterpret_cast<uint8_t*>(output.data()) + static_cast<size_t>(y) * targetWidth * 4;
                 for (uint32_t x = 0; x < targetWidth; ++x, out += 4) {
-                    auto const sourceLeft = static_cast<uint64_t>(x) * frame.width / targetWidth;
+                    auto const sourceLeft = cropLeft + static_cast<uint64_t>(x) * cropWidth / targetWidth;
                     auto const sourceRight =
-                        std::max(sourceLeft + 1, static_cast<uint64_t>(x + 1) * frame.width / targetWidth);
+                        std::max(sourceLeft + 1, cropLeft + static_cast<uint64_t>(x + 1) * cropWidth / targetWidth);
 
                     uint32_t sums[4]{};
                     uint32_t samples{};
@@ -186,6 +197,33 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
                     out[1]          = static_cast<uint8_t>((sums[1] + half) / samples);
                     out[2]          = static_cast<uint8_t>((sums[blueIndex] + half) / samples);
                     out[3]          = static_cast<uint8_t>((sums[3] + half) / samples);
+                }
+            }
+        };
+        frameWorkerPool().runRows(targetHeight, rows);
+    } else if (upscale) {
+        // Bilinear over the kept centre, sampled at pixel centres.
+        std::function<void(uint32_t, uint32_t)> const rows = [&](uint32_t firstRow, uint32_t lastRow) {
+            float const stepX = static_cast<float>(cropWidth) / static_cast<float>(targetWidth);
+            float const stepY = static_cast<float>(cropHeight) / static_cast<float>(targetHeight);
+            for (uint32_t y = firstRow; y < lastRow; ++y) {
+                float const sy = std::clamp((static_cast<float>(y) + 0.5f) * stepY - 0.5f, 0.0f, cropHeight - 1.0f);
+                auto const  y0 = static_cast<uint32_t>(sy);
+                auto const  y1 = std::min(y0 + 1, cropHeight - 1);
+                float const fy = sy - static_cast<float>(y0);
+                auto* out = reinterpret_cast<uint8_t*>(output.data()) + static_cast<size_t>(y) * targetWidth * 4;
+                for (uint32_t x = 0; x < targetWidth; ++x, out += 4) {
+                    float const sx = std::clamp((static_cast<float>(x) + 0.5f) * stepX - 0.5f, 0.0f, cropWidth - 1.0f);
+                    auto const  x0 = static_cast<uint32_t>(sx);
+                    auto const  x1 = std::min(x0 + 1, cropWidth - 1);
+                    float const fx = sx - static_cast<float>(x0);
+                    for (uint32_t channel = 0; channel < 4; ++channel) {
+                        float const top = read(cropLeft + x0, cropTop + y0, channel) * (1.0f - fx)
+                                        + read(cropLeft + x1, cropTop + y0, channel) * fx;
+                        float const bottom = read(cropLeft + x0, cropTop + y1, channel) * (1.0f - fx)
+                                           + read(cropLeft + x1, cropTop + y1, channel) * fx;
+                        out[channel] = static_cast<uint8_t>(top * (1.0f - fy) + bottom * fy + 0.5f);
+                    }
                 }
             }
         };

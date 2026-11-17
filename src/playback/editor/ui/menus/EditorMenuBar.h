@@ -45,6 +45,8 @@ private:
     int  mExportCrf{18};
     bool mExportHideHud{false};
     bool mExportAudio{true};
+    // The output keeps the viewport's frame shape; off, any width and height go (the frame's centre is kept).
+    bool mExportMatchProject{true};
     int  mExportAudioChannels{1};
     int  mExportAudioCodec{0};
     int  mExportAudioBitrate{1};
