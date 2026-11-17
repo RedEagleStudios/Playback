@@ -1341,6 +1341,54 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.worldGlobalPacksHint"_tr().c_str());
     ImGui::PopTextWrapPos();
 
+    property::separator();
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldOverrideColor"_tr() + "##set-override-color").c_str(),
+            &world.overrideColor
+        ))
+        commit(world);
+    ImGui::BeginDisabled(!world.overrideColor);
+    auto const colorSlider = [&](std::string const& label,
+                                 char const*        id,
+                                 float WorldSettings::* field,
+                                 float                  low,
+                                 float                  high,
+                                 char const*            format) {
+        ImGui::TextDisabled("%s", label.c_str());
+        ImGui::SetNextItemWidth(-1.0f);
+        float      value   = world.*field;
+        bool const changed = ImGui::SliderFloat(id, &value, low, high, format, ImGuiSliderFlags_AlwaysClamp);
+        auto       edited  = world;
+        edited.*field      = value;
+        drag(changed, edited);
+    };
+    colorSlider(
+        "playback.refactorEditor.inspector.worldExposure"_tr(),
+        "##set-exposure",
+        &WorldSettings::exposure,
+        -WorldSettings::MaxExposure,
+        WorldSettings::MaxExposure,
+        "%+.2f EV"
+    );
+    colorSlider(
+        "playback.refactorEditor.inspector.worldTemperature"_tr(),
+        "##set-temperature",
+        &WorldSettings::temperature,
+        -1.0f,
+        1.0f,
+        "%+.2f"
+    );
+    colorSlider(
+        "playback.refactorEditor.inspector.worldTint"_tr(),
+        "##set-tint",
+        &WorldSettings::tint,
+        -1.0f,
+        1.0f,
+        "%+.2f"
+    );
+    widgets::itemTooltip("playback.refactorEditor.inspector.worldColorHint"_tr().c_str());
+    ImGui::EndDisabled();
+
     if (mWorldDraft && !ImGui::IsAnyItemActive()) commit(*mWorldDraft);
 
     ImGui::PushTextWrapPos(0.0f);

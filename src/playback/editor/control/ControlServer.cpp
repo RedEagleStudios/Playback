@@ -53,6 +53,10 @@ json toJson(model::WorldSettings const& world) {
         {"graphics",            magic_enum::enum_name(world.graphics)},
         {"overrideGlobalPacks", world.overrideGlobalPacks            },
         {"globalPacks",         std::move(packs)                     },
+        {"overrideColor",       world.overrideColor                  },
+        {"exposure",            world.exposure                       },
+        {"temperature",         world.temperature                    },
+        {"tint",                world.tint                           },
     };
 }
 
@@ -210,6 +214,10 @@ model::WorldSettings worldFrom(json const& node, model::WorldSettings world) {
             });
         }
     }
+    world.overrideColor = node.value("overrideColor", world.overrideColor);
+    world.exposure      = node.value("exposure", world.exposure);
+    world.temperature   = node.value("temperature", world.temperature);
+    world.tint          = node.value("tint", world.tint);
     return world.sanitized();
 }
 
@@ -231,6 +239,36 @@ model::FollowSettings followFrom(json const& node, model::FollowSettings follow)
     }
     follow.hasTripod = node.value("hasTripod", follow.hasTripod);
     return follow.sanitized();
+}
+
+// Export settings over the defaults; fields it leaves out keep them. The tick range and resolution have no usable
+// default, so a caller sets them.
+exporting::ExportSettings exportFrom(json const& node) {
+    exporting::ExportSettings settings;
+    if (auto const directory = node.find("outputDirectory"); directory != node.end() && directory->is_string()) {
+        auto const text          = directory->get<std::string>();
+        settings.outputDirectory = std::filesystem::path(std::u8string(text.begin(), text.end()));
+    }
+    settings.outputName          = node.value("outputName", settings.outputName);
+    settings.startTick           = node.value("startTick", settings.startTick);
+    settings.endTick             = node.value("endTick", settings.endTick);
+    settings.frameRate.numerator = node.value("fps", settings.frameRate.numerator);
+    if (auto const format = node.find("format"); format != node.end() && format->is_string()) {
+        if (auto const parsed = magic_enum::enum_cast<exporting::ExportFormat>(format->get<std::string>())) {
+            settings.format = *parsed;
+        }
+    }
+    if (auto const resolution = node.find("resolution");
+        resolution != node.end() && resolution->is_array() && resolution->size() == 2) {
+        settings.resolutionX = (*resolution)[0].get<uint32_t>();
+        settings.resolutionY = (*resolution)[1].get<uint32_t>();
+    }
+    settings.ssaa         = node.value("ssaa", settings.ssaa);
+    settings.warmupFrames = node.value("warmupFrames", settings.warmupFrames);
+    settings.extraRenders = node.value("extraRenders", settings.extraRenders);
+    settings.audio        = node.value("audio", settings.audio);
+    settings.hideHud      = node.value("hideHud", settings.hideHud);
+    return settings;
 }
 
 // The EditorAction `body` describes; fields it leaves out keep the action's defaults.
@@ -286,6 +324,9 @@ std::optional<EditorAction> actionFrom(json const& body, EditorState const& stat
             model::Vec2{(*bezier)[0][0].get<float>(), (*bezier)[0][1].get<float>()},
             model::Vec2{(*bezier)[1][0].get<float>(), (*bezier)[1][1].get<float>()},
         };
+    }
+    if (auto const settings = body.find("exportSettings"); settings != body.end() && settings->is_object()) {
+        action.exportSettings = exportFrom(*settings);
     }
     return action;
 }

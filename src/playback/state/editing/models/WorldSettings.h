@@ -49,6 +49,15 @@ struct WorldSettings {
     // the replay world loads until it closes; the replay world's own packs stay above them.
     bool                    overrideGlobalPacks{};
     std::vector<GlobalPack> globalPacks;
+    // Off: the game's own colours.
+    bool overrideColor{};
+    // Stops, [-MaxExposure, MaxExposure].
+    float exposure{};
+    // [-1, 1]: cool to warm, and green to magenta.
+    float temperature{};
+    float tint{};
+
+    static constexpr float MaxExposure = 3.0f;
 
     static constexpr float MaxFogDistance = 4.0f;
     static constexpr float MinFogRange    = 0.01f;
@@ -63,6 +72,9 @@ struct WorldSettings {
         out.fogStart      = unit(fogStart, 0.0f, MaxFogDistance - MinFogRange, 0.92f);
         out.fogEnd =
             unit(fogEnd, out.fogStart + MinFogRange, MaxFogDistance, std::max(out.fogStart + MinFogRange, 1.0f));
+        out.exposure    = unit(exposure, -MaxExposure, MaxExposure, 0.0f);
+        out.temperature = unit(temperature, -1.0f, 1.0f, 0.0f);
+        out.tint        = unit(tint, -1.0f, 1.0f, 0.0f);
         if (graphics != GraphicsStyle::Simple && graphics != GraphicsStyle::Fancy
             && graphics != GraphicsStyle::VibrantVisuals)
             out.graphics = GraphicsStyle::Fancy;

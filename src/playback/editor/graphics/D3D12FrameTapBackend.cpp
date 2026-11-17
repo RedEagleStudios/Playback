@@ -636,17 +636,22 @@ bool D3D12FrameTapBackend::capture(
     }
     if (slot == mImpl->slots.end()) return false;
 
-    uint32_t const requested    = mImpl->frameTap.captureDownsample();
-    auto           readbackDesc = sourceDesc;
-    uint32_t       factor       = 1;
-    if (requested >= 2 && sourceDesc.Width % requested == 0 && sourceDesc.Height % requested == 0
-        && mImpl->downsampler.ready(device)) {
-        readbackDesc.Width  = sourceDesc.Width / requested;
-        readbackDesc.Height = sourceDesc.Height / requested;
-        if (mImpl->prepareDownsampleTexture(*slot, device, readbackDesc)) {
-            factor = requested;
-        } else {
-            readbackDesc = sourceDesc;
+    uint32_t const requested = mImpl->frameTap.captureDownsample();
+    auto const     gain      = currentColorGain();
+    bool const downsample   = requested >= 2 && sourceDesc.Width % requested == 0 && sourceDesc.Height % requested == 0;
+    auto       readbackDesc = sourceDesc;
+    uint32_t   factor       = 1;
+    // The GPU pass downsamples, grades, or both; without either the frame is read back as it is.
+    bool gpuPass = false;
+    if ((downsample || gain) && mImpl->downsampler.ready(device)) {
+        uint32_t const passFactor = downsample ? requested : 1;
+        auto           passDesc   = sourceDesc;
+        passDesc.Width            = sourceDesc.Width / passFactor;
+        passDesc.Height           = sourceDesc.Height / passFactor;
+        if (mImpl->prepareDownsampleTexture(*slot, device, passDesc)) {
+            readbackDesc = passDesc;
+            factor       = passFactor;
+            gpuPass      = true;
         }
     }
     if (requested >= 2 && factor == 1) mImpl->downsampleFallbacks.fetch_add(1);
@@ -687,7 +692,7 @@ bool D3D12FrameTapBackend::capture(
         };
 
     ID3D12Resource* copySource = source;
-    if (factor >= 2) {
+    if (gpuPass) {
         auto const incoming = static_cast<D3D12_RESOURCE_STATES>(sourceState);
         transition(source, incoming, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         bool const dispatched = mImpl->downsampler.dispatch(
@@ -696,7 +701,8 @@ bool D3D12FrameTapBackend::capture(
             slot->downsampleTexture.Get(),
             static_cast<uint32_t>(slot->width),
             slot->height,
-            factor
+            factor,
+            gain
         );
         transition(source, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, incoming);
         if (!dispatched) {
@@ -721,7 +727,7 @@ bool D3D12FrameTapBackend::capture(
     sourceLocation.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     sourceLocation.SubresourceIndex = 0;
     commandList->CopyTextureRegion(&destination, 0, 0, 0, &sourceLocation, nullptr);
-    if (factor >= 2) {
+    if (gpuPass) {
         transition(
             slot->downsampleTexture.Get(),
             D3D12_RESOURCE_STATE_COPY_SOURCE,

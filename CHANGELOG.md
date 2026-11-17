@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `POST /select` on the control API selects a keyframe as clicking it would, so the inspector shows it: `{"cameraId": "...", "tick": 120}`.
+- `POST /select` on the control API selects a keyframe as clicking it would, so the inspector shows it: `{"cameraId": "...", "tick": 120}`. `StartExport` takes `exportSettings` (`outputName`, `outputDirectory`, `startTick`, `endTick`, `fps`, `format`, `resolution`, `ssaa`, `warmupFrames`, `extraRenders`, `audio`, `hideHud`), so scripts can export a range.
 - A Cubic Bezier keyframe's inspector shows its easing as a graph of progress over time to the next key. The two control points are dragged on the graph, a dot loops along the curve to show the motion, and each drag is one undo step. Time stays between the keys; progress may overshoot them. The Easing dropdown also offers None, which sets the keys back to Smooth.
+- The World section has colour grading: exposure in stops, temperature from cool to warm and tint from green to magenta, applied in linear light to the preview and to exported frames. Temperature and tint keep the brightness. Saved in the project; the control API's `SetWorldSettings` takes `overrideColor`, `exposure`, `temperature` and `tint`.
 
 ## [0.4.0-mc26.60-re.2] - 2026-11-17
 

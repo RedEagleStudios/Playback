@@ -450,7 +450,11 @@ std::string serializeProject(model::EditorStateExt const& project) {
              {"overrideGraphics", project.world.overrideGraphics},
              {"graphics", static_cast<int>(project.world.graphics)},
              {"overrideGlobalPacks", project.world.overrideGlobalPacks},
-             {"globalPacks", std::move(globalPacks)}
+             {"globalPacks", std::move(globalPacks)},
+             {"overrideColor", project.world.overrideColor},
+             {"exposure", project.world.exposure},
+             {"temperature", project.world.temperature},
+             {"tint", project.world.tint}
          }                                                             },
         {"recordedCameraTracksAdded", project.recordedCameraTracksAdded}
     };
@@ -539,6 +543,10 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
                 if (!entry.id.empty()) loaded.world.globalPacks.push_back(std::move(entry));
             }
         }
+        loaded.world.overrideColor = boolOr(*world, "overrideColor", defaults.overrideColor);
+        loaded.world.exposure      = finiteOr(*world, "exposure", defaults.exposure);
+        loaded.world.temperature   = finiteOr(*world, "temperature", defaults.temperature);
+        loaded.world.tint          = finiteOr(*world, "tint", defaults.tint);
         loaded.world              = loaded.world.sanitized();
     }
     loaded.recordedCameraTracksAdded = boolOr(document, "recordedCameraTracksAdded", false);

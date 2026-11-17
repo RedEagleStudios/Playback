@@ -549,6 +549,11 @@
                 "worldGlobalPacksNoneInstalled": "没有其他已安装的资源包",
                 "worldGlobalPackMissing": "未安装",
                 "worldGlobalPackRemove": "移除",
+                "worldOverrideColor": "调色",
+                "worldExposure": "曝光",
+                "worldTemperature": "色温",
+                "worldTint": "色调",
+                "worldColorHint": "曝光以档为单位。色温从冷（蓝）到暖（橙），色调从绿到品红；两者都保持亮度不变。按住 Ctrl 点击滑块可输入数值。",
                 "worldHint": "保存在项目中。同时作用于预览和导出的视频。"
             },
             "defaults": {

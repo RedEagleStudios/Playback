@@ -1,6 +1,7 @@
 ﻿#include "EditorController.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/graphics/ColorGrading.h"
 #include "playback/editor/graphics/FogOverride.h"
 #include "playback/io/ReplayLibrary.h"
 #include "playback/keyframe/CameraTimelineEvaluator.h"
@@ -508,6 +509,7 @@ void EditorController::publishState(bool hudVisible) {
         mActiveReplayPath.clear();
         mWorldPreview.reset();
         editor::graphics::setFogOverride(std::nullopt);
+        editor::graphics::setColorGrading(std::nullopt);
     }
     ensureProject(state.totalTicks, mActiveReplayPath);
     if (sessionActive) addRecordedCameraTracks();
@@ -524,6 +526,11 @@ void EditorController::publishState(bool hudVisible) {
         editor::graphics::setFogOverride(
             world.overrideFog ? std::optional<editor::graphics::FogOverride>{{world.fogStart, world.fogEnd}}
                               : std::nullopt
+        );
+        editor::graphics::setColorGrading(
+            world.overrideColor
+                ? std::optional<editor::graphics::ColorGrading>{{world.exposure, world.temperature, world.tint}}
+                : std::nullopt
         );
         session.setGraphicsOverride(world.overrideGraphics ? std::optional{world.graphics} : std::nullopt);
         state.installedGlobalPacks = session.installedGlobalPacks();

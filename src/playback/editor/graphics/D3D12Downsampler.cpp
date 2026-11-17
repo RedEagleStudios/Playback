@@ -18,8 +18,11 @@ using Microsoft::WRL::ComPtr;
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
 constexpr uint32_t ThreadGroupSize = 8;
+// Descriptor sets handed out in turn; more than the frames that can be in flight, so none is rewritten in use.
+constexpr uint32_t DescriptorSets = 8;
 
-// A box average matches the CPU path exactly, so switching to the GPU does not change the output.
+// A box average matches the CPU path exactly, so switching to the GPU does not change the output. The grade works in
+// linear light (frames are sRGB-encoded) and clips what exposure pushes past white.
 constexpr char const* DownsampleSource = R"(
 Texture2D<float4> Source : register(t0);
 RWTexture2D<float4> Destination : register(u0);
@@ -27,12 +30,25 @@ RWTexture2D<float4> Destination : register(u0);
 cbuffer Params : register(b0) {
     uint2 DestinationSize;
     uint Factor;
-    uint Padding;
+    uint Grade;
+    float3 Gain;
+    float Padding;
 };
+
+float4 graded(float4 colour) {
+    if (Grade == 0) return colour;
+    float3 light = pow(max(colour.rgb, 0.0f), 2.2f) * Gain;
+    return float4(pow(saturate(light), 1.0f / 2.2f), colour.a);
+}
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= DestinationSize.x || id.y >= DestinationSize.y) return;
+    // Factor 0: grade Destination where it is.
+    if (Factor == 0) {
+        Destination[id.xy] = graded(Destination[id.xy]);
+        return;
+    }
     uint2 origin = id.xy * Factor;
     float4 total = 0.0f;
     for (uint y = 0; y < Factor; ++y) {
@@ -40,7 +56,7 @@ void main(uint3 id : SV_DispatchThreadID) {
             total += Source.Load(int3(origin + uint2(x, y), 0));
         }
     }
-    Destination[id.xy] = total / (float)(Factor * Factor);
+    Destination[id.xy] = graded(total / (float)(Factor * Factor));
 }
 )";
 
@@ -48,7 +64,9 @@ struct Params {
     uint32_t width{};
     uint32_t height{};
     uint32_t factor{};
-    uint32_t padding{};
+    uint32_t grade{};
+    float    gain[3]{1.0f, 1.0f, 1.0f};
+    float    padding{};
 };
 
 } // namespace
@@ -59,7 +77,12 @@ struct D3D12Downsampler::Impl {
     ComPtr<ID3D12PipelineState>  pipeline;
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     uint32_t                     descriptorSize{};
+    uint32_t                     nextSet{};
     bool                         failed{};
+    bool                         loggedNoInPlace{};
+    // The last format canGradeInPlace() checked, and the answer.
+    DXGI_FORMAT checkedFormat{DXGI_FORMAT_UNKNOWN};
+    bool        inPlaceSupported{};
 
     bool build(ID3D12Device* target) {
         if (failed) return false;
@@ -162,7 +185,7 @@ struct D3D12Downsampler::Impl {
 
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
         heapDesc.Type            = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        heapDesc.NumDescriptors  = 2;
+        heapDesc.NumDescriptors  = 2 * DescriptorSets;
         heapDesc.Flags           = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         HRESULT const heapResult = device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
         if (FAILED(heapResult)) {
@@ -176,7 +199,62 @@ struct D3D12Downsampler::Impl {
         descriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         return true;
     }
+
+    // Binds `source` (null for none) and `destination` in the next descriptor set and runs the shader over the
+    // destination size.
+    void
+    run(ID3D12GraphicsCommandList* commandList,
+        ID3D12Resource*            source,
+        ID3D12Resource*            destination,
+        Params const&              params) {
+        uint32_t const set = nextSet;
+        nextSet            = (nextSet + 1) % DescriptorSets;
+
+        auto cpu  = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        auto gpu  = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+        cpu.ptr  += static_cast<SIZE_T>(2 * set) * descriptorSize;
+        gpu.ptr  += static_cast<UINT64>(2 * set) * descriptorSize;
+
+        // The shader declares t0 either way; grading in place binds a null view there.
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format                  = (source ? source : destination)->GetDesc().Format;
+        srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels     = 1;
+        device->CreateShaderResourceView(source, &srv, cpu);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.Format        = destination->GetDesc().Format;
+        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(destination, nullptr, &uav, {cpu.ptr + descriptorSize});
+
+        ID3D12DescriptorHeap* heaps[]{descriptorHeap.Get()};
+        commandList->SetDescriptorHeaps(1, heaps);
+        commandList->SetComputeRootSignature(rootSignature.Get());
+        commandList->SetPipelineState(pipeline.Get());
+        commandList->SetComputeRootDescriptorTable(0, gpu);
+        commandList->SetComputeRoot32BitConstants(1, sizeof(Params) / sizeof(uint32_t), &params, 0);
+        commandList->Dispatch(
+            (params.width + ThreadGroupSize - 1) / ThreadGroupSize,
+            (params.height + ThreadGroupSize - 1) / ThreadGroupSize,
+            1
+        );
+    }
 };
+
+namespace {
+
+Params paramsFor(uint32_t width, uint32_t height, uint32_t factor, std::optional<ColorGain> const& gain) {
+    Params params{width, height, factor, gain ? 1u : 0u};
+    if (gain) {
+        params.gain[0] = gain->r;
+        params.gain[1] = gain->g;
+        params.gain[2] = gain->b;
+    }
+    return params;
+}
+
+} // namespace
 
 D3D12Downsampler::D3D12Downsampler() : mImpl(std::make_unique<Impl>()) {}
 
@@ -190,38 +268,42 @@ bool D3D12Downsampler::dispatch(
     ID3D12Resource*            destination,
     uint32_t                   destinationWidth,
     uint32_t                   destinationHeight,
-    uint32_t                   factor
+    uint32_t                   factor,
+    std::optional<ColorGain>   gain
 ) {
-    if (!commandList || !source || !destination || factor < 2 || !mImpl->pipeline) return false;
+    if (!commandList || !source || !destination || factor < 1 || !mImpl->pipeline) return false;
+    mImpl->run(commandList, source, destination, paramsFor(destinationWidth, destinationHeight, factor, gain));
+    return true;
+}
 
-    auto const base = mImpl->descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+bool D3D12Downsampler::canGradeInPlace(ID3D12Resource* texture) {
+    if (!texture || !mImpl->pipeline) return false;
+    if ((texture->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) == 0) return false;
+    // Reading a typed UAV of an 8-bit format is an optional feature; without it the shader would read zeros.
+    auto const format = texture->GetDesc().Format;
+    if (format == mImpl->checkedFormat) return mImpl->inPlaceSupported;
+    D3D12_FEATURE_DATA_FORMAT_SUPPORT support{format};
+    mImpl->checkedFormat = format;
+    mImpl->inPlaceSupported =
+        SUCCEEDED(mImpl->device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)))
+        && (support.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD) != 0
+        && (support.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE) != 0;
+    if (!mImpl->inPlaceSupported && !mImpl->loggedNoInPlace) {
+        mImpl->loggedNoInPlace = true;
+        getLogger().warn("This GPU cannot grade the preview in place; colour grading shows in exports only");
+    }
+    return mImpl->inPlaceSupported;
+}
 
-    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
-    srv.Format                  = source->GetDesc().Format;
-    srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv.Texture2D.MipLevels     = 1;
-    mImpl->device->CreateShaderResourceView(source, &srv, base);
-
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
-    uav.Format        = destination->GetDesc().Format;
-    uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-    D3D12_CPU_DESCRIPTOR_HANDLE uavHandle{base.ptr + mImpl->descriptorSize};
-    mImpl->device->CreateUnorderedAccessView(destination, nullptr, &uav, uavHandle);
-
-    Params const params{destinationWidth, destinationHeight, factor, 0};
-
-    ID3D12DescriptorHeap* heaps[]{mImpl->descriptorHeap.Get()};
-    commandList->SetDescriptorHeaps(1, heaps);
-    commandList->SetComputeRootSignature(mImpl->rootSignature.Get());
-    commandList->SetPipelineState(mImpl->pipeline.Get());
-    commandList->SetComputeRootDescriptorTable(0, mImpl->descriptorHeap->GetGPUDescriptorHandleForHeapStart());
-    commandList->SetComputeRoot32BitConstants(1, sizeof(Params) / sizeof(uint32_t), &params, 0);
-    commandList->Dispatch(
-        (destinationWidth + ThreadGroupSize - 1) / ThreadGroupSize,
-        (destinationHeight + ThreadGroupSize - 1) / ThreadGroupSize,
-        1
-    );
+bool D3D12Downsampler::grade(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12Resource*            texture,
+    uint32_t                   width,
+    uint32_t                   height,
+    ColorGain                  gain
+) {
+    if (!commandList || !texture || !mImpl->pipeline) return false;
+    mImpl->run(commandList, nullptr, texture, paramsFor(width, height, 0, gain));
     return true;
 }
 

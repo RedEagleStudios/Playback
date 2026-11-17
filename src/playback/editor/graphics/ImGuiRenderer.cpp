@@ -2,6 +2,7 @@
 
 #include "playback/editor/graphics/D3D11FrameTapBackend.h"
 #include "playback/editor/graphics/D3D12Compat.h"
+#include "playback/editor/graphics/D3D12Downsampler.h"
 #include "playback/editor/graphics/D3D12FrameTapBackend.h"
 #include "playback/editor/graphics/D3D12Hooks.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
@@ -240,6 +241,8 @@ struct ImGuiRenderer::Impl {
     visuals::FrameTap                       frameTap;
     D3D11FrameTapBackend                    d3d11FrameTap{frameTap};
     D3D12FrameTapBackend                    d3d12FrameTap{frameTap};
+    // Applies the project's colour grade to the preview copy of each frame.
+    D3D12Downsampler                        previewGrader;
     std::mutex                              captureMutex;
     std::optional<visuals::FrameTapSession> captureSession;
     uint32_t                                exportCaptureCapacity{};
@@ -901,8 +904,13 @@ struct ImGuiRenderer::Impl {
         auto rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
         D3D12_HEAP_PROPERTIES
         defHeap{D3D12_HEAP_TYPE_DEFAULT, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1};
-        auto gd  = bufDesc;
-        gd.Flags = D3D12_RESOURCE_FLAG_NONE;
+        auto gd = bufDesc;
+        // The preview grade writes the copy in place; that needs a UAV, which not every backbuffer format allows.
+        D3D12_FEATURE_DATA_FORMAT_SUPPORT gameFormat{bufDesc.Format};
+        bool const                        gameUav =
+            SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &gameFormat, sizeof(gameFormat)))
+            && (gameFormat.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) != 0;
+        gd.Flags = gameUav ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
 
         for (UINT i = 0; i < scDesc.BufferCount; ++i) {
             auto& f = frames[i];
@@ -1688,6 +1696,26 @@ bool ImGuiRenderer::renderInternal(
     if (copyGameTexture) {
         f.commandList->CopyResource(f.gameTexture.Get(), f.backBuffer.Get());
         p.lastGameTextureIndex = fi;
+        if (auto const gain = currentColorGain();
+            gain && p.previewGrader.ready(p.device.Get()) && p.previewGrader.canGradeInPlace(f.gameTexture.Get())) {
+            auto const             gameDesc = f.gameTexture->GetDesc();
+            D3D12_RESOURCE_BARRIER grading{};
+            grading.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            grading.Transition.pResource   = f.gameTexture.Get();
+            grading.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            grading.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            grading.Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            f.commandList->ResourceBarrier(1, &grading);
+            p.previewGrader.grade(
+                f.commandList.Get(),
+                f.gameTexture.Get(),
+                static_cast<uint32_t>(gameDesc.Width),
+                gameDesc.Height,
+                *gain
+            );
+            std::swap(grading.Transition.StateBefore, grading.Transition.StateAfter);
+            f.commandList->ResourceBarrier(1, &grading);
+        }
     }
 
     std::array<D3D12_RESOURCE_BARRIER, 3> toRender{};

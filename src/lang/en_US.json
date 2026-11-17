@@ -549,6 +549,11 @@
                 "worldGlobalPacksNoneInstalled": "No other resource packs installed",
                 "worldGlobalPackMissing": "not installed",
                 "worldGlobalPackRemove": "Remove",
+                "worldOverrideColor": "Colour grading",
+                "worldExposure": "Exposure",
+                "worldTemperature": "Temperature",
+                "worldTint": "Tint",
+                "worldColorHint": "Exposure in stops. Temperature runs from cool (blue) to warm (orange), tint from green to magenta; both keep the brightness. Ctrl+click a slider to type a value.",
                 "worldHint": "Saved in the project. Applies to the preview and to exported video."
             },
             "defaults": {
