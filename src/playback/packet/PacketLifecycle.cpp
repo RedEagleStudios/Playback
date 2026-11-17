@@ -45,7 +45,6 @@ constexpr auto PacketLifecycleTable = std::to_array<PacketLifecycleEntry>({
     {MinecraftPacketIds::AvailableCommands,
      {PacketLifecycle::SnapshotLatest, true, false, MinecraftPacketIds::UpdateSoftEnum}                            },
     {MinecraftPacketIds::ItemRegistryPacket,                      {PacketLifecycle::SnapshotLatest}                },
-    {MinecraftPacketIds::SyncActorProperty,                       {PacketLifecycle::SnapshotLatest}                },
     {MinecraftPacketIds::DimensionDataPacket,                     {PacketLifecycle::SnapshotLatest}                },
     {MinecraftPacketIds::FeatureRegistryPacket,                   {PacketLifecycle::SnapshotLatest}                },
     {MinecraftPacketIds::CameraPresets,                           {PacketLifecycle::SnapshotLatest}                },
@@ -58,6 +57,9 @@ constexpr auto PacketLifecycleTable = std::to_array<PacketLifecycleEntry>({
     {MinecraftPacketIds::CraftingData,                            {PacketLifecycle::SnapshotSequence}              },
     {MinecraftPacketIds::UpdateSoftEnum,                          {PacketLifecycle::SnapshotSequence}              },
     {MinecraftPacketIds::CameraAimAssistPresets,                  {PacketLifecycle::SnapshotSequence}              },
+    // One packet per entity type with properties; keeping only the last would leave every other type's client-synced
+    // properties undecodable, and add-on models that read them (q.property) draw wrong or not at all.
+    {MinecraftPacketIds::SyncActorProperty,                       {PacketLifecycle::SnapshotSequence}              },
 });
 
 consteval bool hasUniquePacketIds() {
