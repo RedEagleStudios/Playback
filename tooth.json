@@ -1,8 +1,8 @@
 {
   "format_version": 3,
   "format_uuid": "289f771f-2c9a-4d73-9f3f-8492495a924d",
-  "tooth": "github.com/wo55555/Playback",
-  "version": "0.4.0-mc26.60",
+  "tooth": "github.com/RedEagleStudios/Playback",
+  "version": "0.4.0-mc26.60-re.1",
   "info": {
     "name": "Playback",
     "description": "Open-source Minecraft Bedrock replay mod with recording, cinematic camera keyframes, and experimental video export.",
@@ -15,7 +15,7 @@
       "camera-editor",
       "video-export"
     ],
-    "avatar_url": "https://raw.githubusercontent.com/wo55555/Playback/main/assets/pack_icon.png"
+    "avatar_url": "https://raw.githubusercontent.com/RedEagleStudios/Playback/re-main/assets/pack_icon.png"
   },
   "variants": [
     {

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-mc26.60-re.1] - 2026-11-17
+
+RedEagleStudios fork release, built from `re-main`.
+
+### Added
+
+- Camera views set by the server (`/camera` and add-on cutscenes, including spline cameras) are recorded once per tick and become one keyframe track per cutscene, named Recorded camera, when the replay opens. Keys are kept only where the motion bends, and cuts hold the pose before them. The tracks can be previewed, disabled, edited or deleted like any other; deleting them is remembered in the project. Replays recorded with these views no longer let the server's camera take over the free camera; fades still play.
+- The inspector's Preview page has a World section saved in the project and applied to preview and export: a time of day (frozen, or running from the set time), hiding the clouds, and a fog override whose start and end are set in percent of the render distance.
+- Third-person camera tracks have a Follow section: behind (distance and height), over the shoulder, orbit (speed and start angle) and tripod (a fixed position taken from the current view), with optional smoothing. Preview and export frame the same way.
+- Keyframes have easing presets (sine, quad, cubic, quart, quint, expo, circ and back, each in, out and in-out) in the inspector and the keyframe menu. Back overshoots the keys.
+
+### Fixed
+
+- Add-on entities whose models read client-synced entity properties are drawn in replays. Only the last entity type's property definitions were recorded, so cutscene actors were invisible.
+- Seeking into a running `/playanimation` clip resumes it at the recorded time instead of restarting it, so cutscene actors are posed correctly after a seek.
+- The free camera stays movable when the recording contains input locks or movement corrections sent to the recording player.
+- Recorded custom skins are shown instead of Steve or Alex, and `/playanimation` on the recording player plays in replays.
+- Runs under Wine and Proton: the editor falls back to a window swapchain when composition swapchains are unavailable, and the game image check accepts the GDK layout.
+
+### Changed
+
+- The SHA3-512 hashes of cached chunks are computed with mbedtls instead of OpenSSL, with identical results.
+- `tooth.json` points at `github.com/RedEagleStudios/Playback`.
+
 ## [0.4.0-mc26.60] - 2026-11-15
 
 ### Added
