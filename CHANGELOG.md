@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A local HTTP API on `127.0.0.1:7878` drives the replay editor like its UI, so scripts and tools can control a replay without the mouse or keyboard: `GET /state` returns the editor state as JSON (playhead, tracks and keys, world and follow settings, players, replay list, export), `GET /actions` lists the action types, and `POST /action` runs one, e.g. `{"type": "Seek", "tick": 1700}`. It listens on the loopback address only and is on by default (`control.enabled`, `control.port`).
 - The World section sets the replay's graphics mode (Simple, Fancy or Vibrant Visuals) and its global resource packs. The chosen packs, in the listed order, replace the viewer's own global packs from when the replay world loads until it closes; the replay world's packs stay above them, and changes take effect the next time the replay opens. The graphics mode follows the project while the replay plays. Both are saved in the project and apply to preview and export, and the viewer's own settings come back when the replay closes. The control API's `SetWorldSettings` takes the same fields, and `GET /state` lists the installed packs.
 
+### Fixed
+
+- Opening a replay from a server with add-on blocks no longer crashes the game while the replay world loads. Recorded custom blocks are initialized one at a time after registration, before their component storage is finalized; a block the game cannot initialize is skipped and named in the log instead of crashing the game.
+
 ## [0.4.0-mc26.60-re.1] - 2026-11-17
 
 RedEagleStudios fork release, built from `re-main`.

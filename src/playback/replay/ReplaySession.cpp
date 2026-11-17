@@ -185,6 +185,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <excpt.h>
 #include <filesystem>
 #include <format>
 #include <limits>
@@ -237,6 +238,18 @@ using namespace playback::record;
 namespace {
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
+
+// The game's initializer reaches into components the replay world may not back, and faults on some servers' add-on
+// blocks (crops and trees have). Such a block is skipped instead of taking the game down; it may look wrong in the
+// replay. No C++ objects live in here: __try cannot unwind them.
+bool initializeRecordedBlock(::BlockDefinitionGroup& definitions, ::BlockDefinition const& definition, ::Level& level) {
+    __try {
+        definitions.initializeBlockFromDefinition(definition, level);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
+}
 
 // The viewer's clouds option, changed without saving the options file: a crash while a project hides the clouds
 // must not leave them off.
@@ -3203,30 +3216,46 @@ void ReplaySession::applyRecordedBlockRegistry() {
         auto const preloadedGeometry = preloadRecordedBlockGeometry(properties);
         definitions->digestServerBlockProperties(properties);
 
-        size_t registered = 0;
+        // Every recorded custom block with a definition and a block type is initialized for this level, including
+        // types an earlier replay already registered; vanilla blocks have no recorded definition.
+        std::vector<std::pair<std::string_view, ::BlockDefinition const*>> recorded;
+        size_t                                                             registered = 0;
         for (auto const& [name, tag] : properties) {
-            // The vanilla blocks have already been registered locally; only custom blocks from recorded resource packs
-            // need to be registered here.
-            if (registry.lookupByName(HashedString{name}, false)) continue;
-
             auto const* definition = definitions->tryGetBlockDefinition(name);
             if (!definition) continue;
 
-            auto blockType = definitions->registerDataDrivenBlock(definition->mDescription);
-            if (!blockType) continue;
-
-            blockType->createBlockPermutations(*updaterVersion);
-            definitions->initBlockTypeFromDefinition(*blockType, *definition);
-            ++registered;
+            if (!registry.lookupByName(HashedString{name}, false)) {
+                auto blockType = definitions->registerDataDrivenBlock(definition->mDescription);
+                if (!blockType) continue;
+                blockType->createBlockPermutations(*updaterVersion);
+                definitions->initBlockTypeFromDefinition(*blockType, *definition);
+                ++registered;
+            }
+            recorded.emplace_back(*name, definition);
         }
 
         auto const injectedVisuals = injectRecordedBlockMaterialComponents(properties);
 
+        // One at a time rather than BlockDefinitionGroup::initializeBlocks, which runs every definition unchecked
+        // and lets one faulting add-on block crash the replay.
+        std::string skipped;
+        size_t      skippedCount = 0;
+        for (auto const& [name, definition] : recorded) {
+            if (initializeRecordedBlock(*definitions, *definition, *level)) continue;
+            skipped += skipped.empty() ? "" : ", ";
+            skipped += name;
+            ++skippedCount;
+        }
+        if (skippedCount != 0) {
+            getLogger()
+                .warn("Skipped {} recorded custom block(s) the game could not initialize: {}", skippedCount, skipped);
+        }
+
         // 26.51 no longer exports BlockTypeRegistry::setupDirectAccessBlocks; it is inlined into
         // VanillaWorldSystems::init, which already ran when this replay world was created, and it is the only
-        // writer of mDirectAccessBlocks, so there is nothing left to refresh here.
+        // writer of mDirectAccessBlocks, so there is nothing left to refresh here. Component storage is finalized
+        // after the blocks have their components.
         registry.finalizeBlockComponentStorage();
-        definitions->initializeBlocks(*level);
 
         auto& palette = level->getBlockPalette();
         palette.initFromBlockDefinitions();
