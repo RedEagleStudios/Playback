@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-mc26.60-re.3] - 2026-11-17
+
+RedEagleStudios fork release, built from `re-main`.
+
 ### Added
 
 - `POST /select` on the control API selects a keyframe as clicking it would, so the inspector shows it: `{"cameraId": "...", "tick": 120}`. `StartExport` takes `exportSettings` (`outputName`, `outputDirectory`, `startTick`, `endTick`, `fps`, `format`, `resolution`, `ssaa`, `warmupFrames`, `extraRenders`, `audio`, `hideHud`), so scripts can export a range.
