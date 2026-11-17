@@ -38,25 +38,33 @@ option("target_type")
     set_values("client")
 option_end()
 
+-- Bundle an existing ffmpeg.exe instead of building FFmpeg, whose build needs MSYS2 on a Windows host.
+option("ffmpeg_exe")
+    set_showmenu(true)
+    set_description("Prebuilt ffmpeg.exe to bundle instead of building the playback-ffmpeg package")
+option_end()
+
 add_requires("levilamina 26.60.*", {configs = {target_type = get_config("target_type")}})
 
 add_requires("levibuildscript")
 
 add_requires("stduuid")
 add_requires("xxhash")
-add_requires("openssl")
+add_requires("mbedtls v3.6.7")
 add_requires("libzip")
 add_requires("imgui v1.92.7", {configs = {dx11 = true, dx12 = true}})
-add_requires("playback-ffmpeg 7.1", {
-    configs = {
-        shared = false,
-        gpl = true,
-        ffmpeg = true,
-        ffprobe = false,
-        ffplay = false,
-        libx264 = true,
-    }
-})
+if not has_config("ffmpeg_exe") then
+    add_requires("playback-ffmpeg 7.1", {
+        configs = {
+            shared = false,
+            gpl = true,
+            ffmpeg = true,
+            ffprobe = false,
+            ffplay = false,
+            libx264 = true,
+        }
+    })
+end
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -106,7 +114,7 @@ target("playback")
     add_packages("levilamina")
     add_packages("stduuid")
     add_packages("xxhash")
-    add_packages("openssl")
+    add_packages("mbedtls")
     add_packages("libzip")
     add_packages("imgui")
     add_syslinks("d3d11", "d3d12", "dxgi", "dcomp", "d3dcompiler", "windowscodecs", "ole32", "comdlg32", "shell32", "gdi32")
@@ -150,11 +158,14 @@ target("playback")
         os.mkdir(font_dir)
         os.cp(font_source, font_dir)
 
-        local ffmpeg_package = assert(
-            project.required_package("playback-ffmpeg"),
-            "FFmpeg package was not resolved"
-        )
-        local ffmpeg_source  = path.join(ffmpeg_package:installdir(), "bin", "ffmpeg.exe")
+        local ffmpeg_source = get_config("ffmpeg_exe")
+        if not ffmpeg_source then
+            local ffmpeg_package = assert(
+                project.required_package("playback-ffmpeg"),
+                "FFmpeg package was not resolved"
+            )
+            ffmpeg_source = path.join(ffmpeg_package:installdir(), "bin", "ffmpeg.exe")
+        end
         local tools_dir      = path.join(output_dir, "tools")
         assert(os.isfile(ffmpeg_source), "bundled ffmpeg executable was not found")
         os.mkdir(tools_dir)
