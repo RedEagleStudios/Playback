@@ -830,6 +830,8 @@ OfflineRenderStepResult OfflineRenderBoundary::advanceWarmup(ExportFramePlan con
 }
 
 bool OfflineRenderBoundary::warmupComplete() const {
+    // The time limit can run out while a warm-up render is still in flight; its clock sample must be released first.
+    if (hasStep(OfflineRenderClockKind::Warmup)) return false;
     if (mWarmupFramesRemaining != 0 || mWarmupStableFrames < StableWarmupFrames) return false;
     // No warm-up asked for, none is added.
     return mWarmupFrames == 0
