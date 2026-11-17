@@ -40,6 +40,8 @@ private:
     ImTextureID       mGameTexture{};
     float             mVideoAspectRatio{16.0f / 9.0f};
     Rect              mVideoRect{};
+    // The whole window frame at the video frame's height; projections map onto it, the video rect crops it.
+    Rect              mImageRect{};
     Rect              mOverlayRect{};
     CameraPathOverlay mCameraPath;
     bool              mInfoOverlayVisible{true};

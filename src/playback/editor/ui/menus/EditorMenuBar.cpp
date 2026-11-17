@@ -170,16 +170,27 @@ bool tabStrip(char const* id, char const* const* labels, int count, int& index) 
     return changed;
 }
 
+// Short side of each preset; the long side follows the viewport's frame shape, so 1080p is 1920x1080 at 16:9 and
+// 1080x1920 at 9:16.
+constexpr int kResolutionPresetShortSides[] = {720, 1080, 1440, 2160};
+
 struct ResolutionPreset {
     int width;
     int height;
 };
-constexpr ResolutionPreset kResolutionPresets[] = {
-    {1280, 720 },
-    {1920, 1080},
-    {2560, 1440},
-    {3840, 2160}
-};
+
+// Even sides: H.264 4:2:0 needs them.
+ResolutionPreset resolutionPreset(int shortSide, float aspect) {
+    auto const longSide = [&](float ratio) {
+        return std::max(16, static_cast<int>(std::lround(static_cast<float>(shortSide) * ratio / 2.0f)) * 2);
+    };
+    if (aspect >= 1.0f) return {longSide(aspect), shortSide};
+    return {shortSide, longSide(1.0f / aspect)};
+}
+
+// Motion blur choices: samples per output frame (1 is off) and shutter angles in degrees.
+constexpr uint32_t kMotionBlurSamples[] = {1, 4, 8, 16};
+constexpr uint32_t kShutterAngles[]     = {90, 180, 270, 360};
 
 constexpr exporting::AudioCodec kAudioCodecs[] = {
     exporting::AudioCodec::Aac,
@@ -310,7 +321,7 @@ struct ShortcutColumn {
 
 } // namespace
 
-void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
+void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable, float frameAspect) {
     totalTicks = std::max(0, totalTicks);
     // The dialog always edits a concrete range, so an unset marker resolves to the replay bounds here.
     if (mExportStartTick < 0 || mExportEndTick < 0 || mExportEndTick <= mExportStartTick) {
@@ -329,6 +340,21 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
         std::snprintf(mExportName.data(), mExportName.size(), "%s", stamp.c_str());
     }
     mExportSettingsInitialized = true;
+    // An output of another shape than the frame would render a different view from the one framed in the viewport,
+    // so it is moved onto the frame's shape at the preset nearest its short side.
+    if (frameAspect > 0.0f && mExportWidth > 0 && mExportHeight > 0) {
+        float const outputAspect = static_cast<float>(mExportWidth) / static_cast<float>(mExportHeight);
+        if (std::abs(outputAspect / frameAspect - 1.0f) > 0.01f) {
+            int const shortSide = std::min(mExportWidth, mExportHeight);
+            int       nearest   = kResolutionPresetShortSides[0];
+            for (int const side : kResolutionPresetShortSides) {
+                if (std::abs(side - shortSide) < std::abs(nearest - shortSide)) nearest = side;
+            }
+            auto const preset = resolutionPreset(nearest, frameAspect);
+            mExportWidth      = preset.width;
+            mExportHeight     = preset.height;
+        }
+    }
     if (!ffmpegAvailable && mExportFormat == 0) mExportFormat = 1;
     // Always opens on the first page; the page height is measured again in case the font changed meanwhile.
     mExportTab            = 0;
@@ -396,7 +422,7 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                     false,
                     capabilities.videoExport && !exportActive && state.totalTicks > 0
                 )) {
-                openExportDialog(state.totalTicks, capabilities.ffmpegVideoExport);
+                openExportDialog(state.totalTicks, capabilities.ffmpegVideoExport, ctx.commands.videoAspectRatio());
             }
             ImGui::Separator();
             if (ImGui::MenuItem("playback.refactorEditor.menu.exit"_tr().c_str(), "Esc (hold)")) {
@@ -695,7 +721,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
           "playback.refactorEditor.export.recordAudio"_tr(),
           "playback.refactorEditor.export.audioCodec"_tr(),
           "playback.refactorEditor.export.audioBitrate"_tr(),
-          "playback.refactorEditor.export.extraRenders"_tr()}) {
+          "playback.refactorEditor.export.extraRenders"_tr(),
+          "playback.refactorEditor.export.motionBlur"_tr(),
+          "playback.refactorEditor.export.shutter"_tr()}) {
         hintedLabelWidth = std::max(hintedLabelWidth, textWidth(label) + hintExtra);
     }
     // Fixed label column aligns every value; the capped value column stops inputs spanning the dialog.
@@ -741,8 +769,13 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         char const*       fpsShortOptions[]        = {"30", "60", "120", custom.c_str()};
         constexpr int     fpsValues[]              = {30, 60, 120};
         char const*       ssaaOptions[]            = {"1x", "2x", "4x"};
+        std::string const motionBlurOff            = "playback.refactorEditor.export.motionBlurOff"_tr();
+        char const*       motionBlurOptions[]      = {motionBlurOff.c_str(), "4x", "8x", "16x"};
+        char const*       shutterOptions[]         = {"90°", "180°", "270°", "360°"};
+        static_assert(IM_ARRAYSIZE(motionBlurOptions) == IM_ARRAYSIZE(kMotionBlurSamples));
+        static_assert(IM_ARRAYSIZE(shutterOptions) == IM_ARRAYSIZE(kShutterAngles));
         char const*       resolutionPresetLabels[] = {"720p", "1080p", "1440p", "4K"};
-        static_assert(IM_ARRAYSIZE(resolutionPresetLabels) == IM_ARRAYSIZE(kResolutionPresets));
+        static_assert(IM_ARRAYSIZE(resolutionPresetLabels) == IM_ARRAYSIZE(kResolutionPresetShortSides));
         std::string const mp4Format             = "playback.refactorEditor.export.mp4"_tr();
         std::string const pngFormat             = "playback.refactorEditor.export.pngSequence"_tr();
         char const*       formatOptions[]       = {mp4Format.c_str(), pngFormat.c_str()};
@@ -927,20 +960,22 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
                 // No preset is lit while the fields hold a custom size.
                 propertyLabel("playback.refactorEditor.export.resolutionPreset"_tr().c_str());
-                int resolutionPreset = -1;
-                for (int i = 0; i < IM_ARRAYSIZE(kResolutionPresets); ++i) {
-                    if (kResolutionPresets[i].width == mExportWidth && kResolutionPresets[i].height == mExportHeight)
-                        resolutionPreset = i;
+                float const frameAspect = ctx.commands.videoAspectRatio();
+                int         presetIndex = -1;
+                for (int i = 0; i < IM_ARRAYSIZE(kResolutionPresetShortSides); ++i) {
+                    auto const preset = resolutionPreset(kResolutionPresetShortSides[i], frameAspect);
+                    if (preset.width == mExportWidth && preset.height == mExportHeight) presetIndex = i;
                 }
                 if (segmented(
                         "##export-resolution-preset",
                         resolutionPresetLabels,
                         IM_ARRAYSIZE(resolutionPresetLabels),
-                        resolutionPreset,
+                        presetIndex,
                         resolutionRowWidth
                     )) {
-                    mExportWidth  = kResolutionPresets[resolutionPreset].width;
-                    mExportHeight = kResolutionPresets[resolutionPreset].height;
+                    auto const preset = resolutionPreset(kResolutionPresetShortSides[presetIndex], frameAspect);
+                    mExportWidth      = preset.width;
+                    mExportHeight     = preset.height;
                 }
 
                 propertyLabel(
@@ -967,6 +1002,32 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                         ssaaDisabledMask
                     ))
                     mExportSsaa = std::clamp(mExportSsaa, 0, 2);
+
+                propertyLabel(
+                    "playback.refactorEditor.export.motionBlur"_tr().c_str(),
+                    "playback.refactorEditor.export.motionBlurHint"_tr().c_str()
+                );
+                segmented(
+                    "##export-motion-blur",
+                    motionBlurOptions,
+                    IM_ARRAYSIZE(motionBlurOptions),
+                    mExportMotionBlur,
+                    resolutionRowWidth
+                );
+
+                propertyLabel(
+                    "playback.refactorEditor.export.shutter"_tr().c_str(),
+                    "playback.refactorEditor.export.shutterHint"_tr().c_str()
+                );
+                // The shutter only shapes the blur; with it off every option is greyed out.
+                segmented(
+                    "##export-shutter",
+                    shutterOptions,
+                    IM_ARRAYSIZE(shutterOptions),
+                    mExportShutter,
+                    resolutionRowWidth,
+                    mExportMotionBlur == 0 ? (1 << IM_ARRAYSIZE(shutterOptions)) - 1 : 0
+                );
 
                 propertyLabel(
                     "playback.refactorEditor.export.warmupFrames"_tr().c_str(),
@@ -1122,6 +1183,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.ssaa              = ssaaValue;
         previewSettings.warmupFrames      = static_cast<uint32_t>(std::max(0, mExportWarmupFrames));
         previewSettings.extraRenders      = static_cast<uint32_t>(std::max(0, mExportExtraRenders));
+        previewSettings.motionBlurSamples =
+            kMotionBlurSamples[std::clamp(mExportMotionBlur, 0, IM_ARRAYSIZE(kMotionBlurSamples) - 1)];
+        previewSettings.motionBlurShutter =
+            kShutterAngles[std::clamp(mExportShutter, 0, IM_ARRAYSIZE(kShutterAngles) - 1)];
         previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         previewSettings.videoCrf          = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         previewSettings.hideHud           = mExportHideHud;

@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace playback::editor::ui {
 
@@ -84,6 +85,12 @@ public:
     [[nodiscard]] bool  isPreviewSilentWhilePaused() const override;
     void                setPreviewSilentWhilePaused(bool silent) override;
 
+    [[nodiscard]] ViewShading                     viewShading() const override { return mViewShading; }
+    void                                          setViewShading(ViewShading shading) override;
+    [[nodiscard]] std::string const&              renderShaderPack() const override { return mRenderShaderPack; }
+    void                                          setRenderShaderPack(std::string pack) override;
+    [[nodiscard]] std::vector<std::string> const& shaderPacks() const override { return mShaderPacks; }
+
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
@@ -124,6 +131,14 @@ private:
     float       mVideoAspectRatio{16.0f / 9.0f};
     UiScaleTier mUiScaleTier{UiScaleTier::Auto};
 
+    ViewShading              mViewShading{ViewShading::Rendered};
+    std::string              mRenderShaderPack;
+    std::vector<std::string> mShaderPacks;
+    // Whether the pack was ever picked (else Arke's own pack is taken when a replay opens), and whether this replay
+    // has listed the packs and put the view in place; the latter resets when the replay closes.
+    bool mRenderShaderPackChosen{};
+    bool mViewShadingLive{};
+
     struct TimelineViewPreferences {
         float zoomScale{1.0f};
         float horizontalScroll{};
@@ -136,6 +151,8 @@ private:
     void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
     void updateExitHold();
+    // Puts the viewport's shading in place; an export always renders with the Rendered pack.
+    void syncViewShading(bool inReplay, bool exportActive);
 
     friend class EditMode;
     friend class RenderMode;

@@ -2,12 +2,18 @@
 
 #include "ExportPlanCompiler.h"
 #include "FfmpegVideoWriter.h"
+#include "FrameWorkerPool.h"
 #include "PngSequenceWriter.h"
 
 #include "playback/audio/ExportAudioCapture.h"
 
+#include <cstdint>
+#include <functional>
+#include <limits>
 #include <mutex>
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace playback::exporting {
 
@@ -18,6 +24,64 @@ namespace {
         return std::make_unique<FfmpegVideoWriter>();
     }
     return std::make_unique<PngSequenceWriter>();
+}
+
+// Motion blur: the samples of the output frame being built, summed per byte; the average is the frame written. Every
+// sample has the same layout, so the bytes add up channel by channel.
+struct MotionBlend {
+    std::vector<uint16_t> sums;
+    uint32_t              count{};
+    uint32_t              width{};
+    uint32_t              height{};
+    uint32_t              rowPitch{};
+    // The driver offers a frame again after backpressure; one already summed is not added twice.
+    uint64_t lastRenderIndex{std::numeric_limits<uint64_t>::max()};
+    // The averaged frame until the writer takes it.
+    std::optional<visuals::CapturedFrame> output;
+};
+
+[[nodiscard]] bool addSample(MotionBlend& blend, visuals::CapturedFrame const& frame) {
+    if (frame.pixels.size() != static_cast<size_t>(frame.rowPitch) * frame.height || frame.pixels.empty()) return false;
+    if (blend.count == 0) {
+        blend.width    = frame.width;
+        blend.height   = frame.height;
+        blend.rowPitch = frame.rowPitch;
+        blend.sums.assign(frame.pixels.size(), 0);
+    } else if (frame.width != blend.width || frame.height != blend.height || frame.rowPitch != blend.rowPitch) {
+        return false;
+    }
+    auto const* source = reinterpret_cast<uint8_t const*>(frame.pixels.data());
+    std::function<void(uint32_t, uint32_t)> const rows = [&](uint32_t firstRow, uint32_t lastRow) {
+        size_t const end = static_cast<size_t>(lastRow) * blend.rowPitch;
+        for (size_t i = static_cast<size_t>(firstRow) * blend.rowPitch; i < end; ++i) blend.sums[i] += source[i];
+    };
+    frameWorkerPool().runRows(frame.height, rows);
+    ++blend.count;
+    return true;
+}
+
+// The output frame: the last sample's layout and presentation time, the average of all samples' pixels.
+[[nodiscard]] visuals::CapturedFrame averageSamples(MotionBlend const& blend, visuals::CapturedFrame const& last) {
+    visuals::CapturedFrame output;
+    output.ticket            = last.ticket;
+    output.ticket.frameIndex = last.ticket.frameIndex / blend.count;
+    output.submission        = last.submission;
+    output.width             = last.width;
+    output.height            = last.height;
+    output.rowPitch          = last.rowPitch;
+    output.pixelFormat       = last.pixelFormat;
+    output.colorSpace        = last.colorSpace;
+    output.pixels.resize(blend.sums.size());
+    auto* const    target = reinterpret_cast<uint8_t*>(output.pixels.data());
+    uint32_t const count  = blend.count;
+    std::function<void(uint32_t, uint32_t)> const rows = [&](uint32_t firstRow, uint32_t lastRow) {
+        size_t const end = static_cast<size_t>(lastRow) * blend.rowPitch;
+        for (size_t i = static_cast<size_t>(firstRow) * blend.rowPitch; i < end; ++i) {
+            target[i] = static_cast<uint8_t>((blend.sums[i] + count / 2) / count);
+        }
+    };
+    frameWorkerPool().runRows(blend.height, rows);
+    return output;
 }
 
 } // namespace
@@ -33,6 +97,8 @@ struct ExportCoordinator::Impl {
     ExportStatus                      currentStatus;
     ExportError                       pendingError{ExportError::None};
     std::string                       pendingMessage;
+    // Touched only under operationMutex.
+    MotionBlend                       blend;
 
     void setFailureLocked(ExportError error, std::string message) {
         currentStatus.state   = ExportState::Faulted;
@@ -112,6 +178,7 @@ bool ExportCoordinator::start(ExportSettings settings, state::editing::model::Ed
         mImpl->compiledPlan.reset();
         mImpl->pendingError = ExportError::None;
         mImpl->pendingMessage.clear();
+        mImpl->blend         = {};
         mImpl->currentStatus        = {};
         mImpl->currentStatus.state  = ExportState::Preparing;
         mImpl->currentStatus.format = settings.format;
@@ -161,6 +228,7 @@ FrameWriterSubmitResult ExportCoordinator::trySubmit(visuals::CapturedFrame& fra
     std::scoped_lock operationLock(mImpl->operationMutex);
     IFrameWriter*    writer = nullptr;
     bool             invalidTicket{};
+    uint32_t         samples{1};
     {
         std::scoped_lock lock(mImpl->mutex);
         if (mImpl->currentStatus.state != ExportState::Running || !mImpl->writer || !mImpl->compiledPlan) {
@@ -176,17 +244,52 @@ FrameWriterSubmitResult ExportCoordinator::trySubmit(visuals::CapturedFrame& fra
             );
             invalidTicket = true;
         }
-        writer = mImpl->writer.get();
+        writer  = mImpl->writer.get();
+        samples = mImpl->compiledPlan->settings.motionBlurSamples;
     }
     if (invalidTicket) {
         writer->requestCancel();
         return FrameWriterSubmitResult::Failed;
     }
 
-    auto const result = writer->trySubmit(frame);
-    // Advance the export audio ledger exactly once per accepted frame (warm-up and extra renders never reach here).
-    if (result == FrameWriterSubmitResult::Accepted)
-        playback::audio::exportcap::onFrameAccepted(frame.ticket.frameIndex);
+    // With motion blur every sample but each output frame's last is only summed; the last completes the average,
+    // which is held until the writer takes it.
+    visuals::CapturedFrame* output = &frame;
+    if (samples > 1) {
+        auto& blend = mImpl->blend;
+        if (!blend.output) {
+            bool added = frame.ticket.frameIndex == blend.lastRenderIndex;
+            if (!added) {
+                added                 = addSample(blend, frame);
+                blend.lastRenderIndex = frame.ticket.frameIndex;
+            }
+            if (!added) {
+                {
+                    std::scoped_lock lock(mImpl->mutex);
+                    mImpl->requestFailureLocked(
+                        ExportError::InvalidFrame,
+                        "A motion blur sample does not match the size of the frame it is averaged into"
+                    );
+                }
+                writer->requestCancel();
+                return FrameWriterSubmitResult::Failed;
+            }
+            if (blend.count < samples) return FrameWriterSubmitResult::Accepted;
+            blend.output = averageSamples(blend, frame);
+        }
+        output = &*blend.output;
+    }
+
+    auto const result = writer->trySubmit(*output);
+    // Advance the export audio ledger exactly once per accepted output frame (warm-up and extra renders never reach
+    // here).
+    if (result == FrameWriterSubmitResult::Accepted) {
+        playback::audio::exportcap::onFrameAccepted(output->ticket.frameIndex);
+        if (samples > 1) {
+            mImpl->blend.output.reset();
+            mImpl->blend.count = 0;
+        }
+    }
     auto const writerStatus = writer->status();
     bool       writerFailed = result == FrameWriterSubmitResult::Failed || writerStatus.error != ExportError::None;
     {
@@ -272,6 +375,7 @@ void ExportCoordinator::reset() {
         mImpl->compiledPlan.reset();
         mImpl->pendingError = ExportError::None;
         mImpl->pendingMessage.clear();
+        mImpl->blend         = {};
         mImpl->currentStatus = {};
     }
     if (writer) {

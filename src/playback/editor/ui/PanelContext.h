@@ -2,13 +2,16 @@
 
 #include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/editor/graphics/ReplayUILayout.h"
+#include "playback/editor/ui/ViewShading.h"
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorState.h"
 #include "playback/state/editing/models/SelectionModel.h"
 #include "playback/visuals/ReplayHudVisibility.h"
 
 #include <functional>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace playback::editor::ui {
 
@@ -63,6 +66,14 @@ public:
     virtual void               setPreviewAudioVolume(float volume, bool commit) = 0;
     [[nodiscard]] virtual bool isPreviewSilentWhilePaused() const               = 0;
     virtual void               setPreviewSilentWhilePaused(bool silent)         = 0;
+
+    // How the viewport draws the replay, and the shader pack Rendered shows and every export renders with (empty:
+    // vanilla). The packs are Arke's; the list is empty when Arke is not installed.
+    [[nodiscard]] virtual ViewShading                     viewShading() const                   = 0;
+    virtual void                                          setViewShading(ViewShading shading)   = 0;
+    [[nodiscard]] virtual std::string const&              renderShaderPack() const              = 0;
+    virtual void                                          setRenderShaderPack(std::string pack) = 0;
+    [[nodiscard]] virtual std::vector<std::string> const& shaderPacks() const                   = 0;
 };
 
 // Everything a panel needs for one frame, so panels stay callable without the editor singleton.

@@ -42,8 +42,21 @@ void drawIconCentred(ImDrawList* drawList, char const* icon, ImVec2 const& origi
 // Icon whose ink centre lands on `centre`, for rows whose height is not a whole number of pixels.
 void drawIconAtCentre(ImDrawList* drawList, char const* icon, ImVec2 const& centre, ImU32 color);
 
-// Transport and window glyphs drawn from primitives so they share one weight and exact centring.
-enum class VectorIcon { SkipStart, StepBack, Play, Pause, StepForward, SkipEnd, Maximize, Restore };
+// Transport and window glyphs drawn from primitives so they share one weight and exact centring. The shading ones are
+// the viewport's view modes, as in a 3D package: a flat disc, a half-lit sphere and a shaded sphere.
+enum class VectorIcon {
+    SkipStart,
+    StepBack,
+    Play,
+    Pause,
+    StepForward,
+    SkipEnd,
+    Maximize,
+    Restore,
+    ShadingFlat,
+    ShadingLit,
+    ShadingRendered,
+};
 
 void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, ImU32 color, VectorIcon icon);
 

@@ -339,6 +339,11 @@
                 "ssaaHint": "Renders at a multiple of the output size and downsamples. Sharper edges, slower export. Levels that would exceed the GPU limit are disabled.",
                 "warmupHint": "Frames rendered and discarded before the first captured frame, so chunks and lighting can settle.",
                 "extraRendersHint": "Renders made and discarded before each frame is saved. 0 renders every frame once, which is right for most exports: ray tracing and Vibrant Visuals keep time with the replay, and the denoiser keeps accumulating across frames. Raise it when noise or trails remain after the lighting changes: extra renders stay on the same instant and only give the denoiser and light accumulation more passes, so those transitions finish sooner in the video. Each one costs a full render, so the export time multiplies.",
+                "motionBlur": "Motion blur",
+                "motionBlurHint": "Renders each frame several times across the open shutter and averages them, so movement smears like a film camera. Off keeps every frame sharp. Each sample is a full render, so 8 samples make the export about eight times slower. The preview is never blurred.",
+                "motionBlurOff": "Off",
+                "shutter": "Shutter",
+                "shutterHint": "How much of each frame's interval the samples cover. 180° is the usual film look; 360° smears across the whole interval, 90° gives short, crisp trails.",
                 "timelineSummary": "Timeline",
                 "captureSummary": "Capture",
                 "encodeSummary": "Encoding",
@@ -479,7 +484,13 @@
                 "autoPreviewTooltip": "Switch the preview camera when selecting a camera or keyframe",
                 "infoOverlay": "Info overlay",
                 "position": "Position",
-                "rotation": "Rotation"
+                "rotation": "Rotation",
+                "shadingFlat": "Flat: no lighting, shadows or shader. Lightest to edit in",
+                "shadingLit": "Lit: the game's lighting and shadows, no shader",
+                "shadingRendered": "Rendered: the picked shader pack, as the export renders it",
+                "shaderMenu": "Shader pack for Rendered and every export",
+                "shaderVanilla": "Vanilla (no shader)",
+                "shaderNoPacks": "No shader packs: install Arke and add packs to its shaderpacks folder"
             },
             "playerPicker": {
                 "searchHint": "Search name or UUID",

@@ -3,6 +3,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
+#include "playback/exporting/ExportActivity.h"
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
@@ -13,6 +14,8 @@
 #include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/game/IClientInstance.h"
+#include "mc/client/game/MinecraftGame.h"
 #include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/client/renderer/game/LevelRendererCamera.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
@@ -680,6 +683,28 @@ LL_TYPE_INSTANCE_HOOK(
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview, context);
 }
 
+// Preview frames hold the replay poses for the whole graphics update, as the export's updateGraphics scope does, not
+// only around renderCurrentFrame: entity animations are evaluated before it, and a cinematic actor's anchor animation
+// offsets its model by (anchor - q.position). Evaluated against the tick position while the model is drawn at the
+// sampled one, every anchor teleport threw the model off for the rest of the tick. The frame scope above then finds
+// this scope active and keeps it.
+LL_TYPE_INSTANCE_HOOK(
+    ReplayEntityPoseGraphicsHook,
+    ll::memory::HookPriority::Lowest,
+    MinecraftGame,
+    &MinecraftGame::updateGraphics,
+    void,
+    Bedrock::NotNullNonOwnerPtr<IClientInstance> const& client,
+    Timer const&                                        timer
+) {
+    if (exporting::isOfflineRenderActivityActive() || exporting::isExportActivityActive()) return origin(client, timer);
+    auto& replay = replay::ReplaySession::getInstance();
+    auto  time   = replay.getEntityRenderSampleTime();
+    if (!time && replay.isFollowViewActive()) time = replay.getCameraRenderSampleTime();
+    auto const pose = time ? replay.createReplayEntityRenderScope(*time) : nullptr;
+    origin(client, timer);
+}
+
 LL_TYPE_INSTANCE_HOOK(
     ReplayCameraSubmitFrameHook,
     ll::memory::HookPriority::Lowest,
@@ -905,6 +930,7 @@ LL_TYPE_INSTANCE_HOOK(
 bool hookCameraRender(bool enable) {
     struct HookState {
         bool frameScope{};
+        bool graphicsPose{};
         bool submitFrame{};
         bool fov{};
         bool fovApi{};
@@ -936,8 +962,9 @@ bool hookCameraRender(bool enable) {
         if (state.fov && ReplayCameraFovHook::unhook()) state.fov = false;
         if (state.submitFrame && ReplayCameraSubmitFrameHook::unhook()) state.submitFrame = false;
         if (state.frameScope && ReplayCameraFrameScopeHook::unhook()) state.frameScope = false;
-        return !state.frameScope && !state.submitFrame && !state.fov && !state.fovApi && !state.setupCamera
-            && !state.finalView;
+        if (state.graphicsPose && ReplayEntityPoseGraphicsHook::unhook()) state.graphicsPose = false;
+        return !state.frameScope && !state.graphicsPose && !state.submitFrame && !state.fov && !state.fovApi
+            && !state.setupCamera && !state.finalView;
     };
 
     if (!enable) return removeAll();
@@ -952,6 +979,10 @@ bool hookCameraRender(bool enable) {
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
 
     if (!state.frameScope) state.frameScope = ReplayCameraFrameScopeHook::hook() == 0;
+    // Optional: without it cinematic actors whose anchors move jitter in the preview, nothing else breaks.
+    if (!state.graphicsPose && !(state.graphicsPose = ReplayEntityPoseGraphicsHook::hook() == 0)) {
+        Playback::getInstance().getSelf().getLogger().warn("Unable to install the replay entity pose graphics hook");
+    }
     if (!state.submitFrame) state.submitFrame = ReplayCameraSubmitFrameHook::hook() == 0;
     if (!state.fov) state.fov = ReplayCameraFovHook::hook() == 0;
     if (!state.fovApi) state.fovApi = ReplayCameraApiFovHook::hook() == 0;

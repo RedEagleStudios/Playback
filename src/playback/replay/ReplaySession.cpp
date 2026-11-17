@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
 #include "playback/editor/input/EditorInput.h"
+#include "playback/exporting/ExportActivity.h"
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/io/ReplayResourcePacks.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
@@ -114,6 +115,8 @@
 #include "mc/world/actor/ActorCategory.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/animation/ActorAnimationControllerPlayer.h"
+#include "mc/world/actor/animation/ActorAnimationControllerStatePlayer.h"
 #include "mc/world/actor/animation/ActorAnimationPlayer.h"
 #include "mc/world/actor/animation/ActorAnimationType.h"
 #include "mc/world/actor/animation/ActorSkeletalAnimationPlayer.h"
@@ -135,6 +138,7 @@
 #include "mc/world/attribute/BaseAttributeMap.h"
 #include "mc/world/attribute/SharedAttributes.h"
 #include "mc/world/containers/managers/models/ContainerManagerModel.h"
+#include "mc/world/effect/MobEffectInstance.h"
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/item/registry/ItemRegistryManager.h"
 #include "mc/world/item/registry/ItemRegistryRef.h"
@@ -2151,6 +2155,29 @@ void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 co
     });
 }
 
+void ReplaySession::applyFlatPreview() {
+    // Night vision lights every block fully. It goes on the client's own player, which is what the renderer reads; the
+    // replay keeps server effects off the observer. Renewed well before it runs out: it flickers in its last 10 s.
+    constexpr int NightVisionId      = 16;
+    constexpr int NightVisionTicks   = 20 * 60 * 10;
+    constexpr int NightVisionRenewal = 20 * 60 * 5;
+    bool const    flat = mFlatPreview.load(std::memory_order_acquire) && !exporting::isExportActivityActive();
+    mVisualOverrides.requestGraphics(
+        flat ? std::optional{state::editing::model::GraphicsStyle::Simple} : mProjectGraphics
+    );
+    if (flat == mFlatNightVision && (!flat || ++mFlatNightVisionAge < NightVisionRenewal)) return;
+    mFlatNightVision    = flat;
+    mFlatNightVisionAge = 0;
+    if (!flat) {
+        mReplayPlayer->removeEffect(NightVisionId);
+        return;
+    }
+    MobEffectInstance effect(NightVisionId, ::EffectDuration{NightVisionTicks});
+    effect.mEffectVisible                   = false;
+    effect.mDisplayOnScreenTextureAnimation = false;
+    mReplayPlayer->addEffect(effect);
+}
+
 void ReplaySession::updateObserverPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
     updatePreviewShot();
@@ -2474,24 +2501,100 @@ void ReplaySession::finishSeek() {
     syncScreenPreviewAfterSeek();
 }
 
+namespace {
+
+// The skeletal clip named rawName anywhere under player: clips started by /playanimation or a script run in the
+// controller the packet names, under their full animation ID, not under the client entity's friendly names.
+ActorSkeletalAnimationPlayer* findSkeletalClip(ActorAnimationPlayer& player, HashedString const& rawName, int depth) {
+    if (depth > 8) return nullptr;
+    switch (player.getAnimationType()) {
+    case ActorAnimationType::SkeletalAnimation:
+        return player.getRawName() == rawName ? &static_cast<ActorSkeletalAnimationPlayer&>(player) : nullptr;
+    case ActorAnimationType::AnimationController: {
+        auto& controller = static_cast<ActorAnimationControllerPlayer&>(player);
+        for (auto const& state : *controller.mAnimationControllerStatePlayers) {
+            if (!state) continue;
+            if (auto* clip = findSkeletalClip(*state, rawName, depth + 1)) return clip;
+        }
+        return nullptr;
+    }
+    case ActorAnimationType::AnimationControllerState:
+        for (auto const& child : *static_cast<ActorAnimationControllerStatePlayer&>(player).mAnimationPlayers) {
+            if (!child) continue;
+            if (auto* clip = findSkeletalClip(*child, rawName, depth + 1)) return clip;
+        }
+        return nullptr;
+    default:
+        return nullptr;
+    }
+}
+
+ActorSkeletalAnimationPlayer* findSkeletalClip(AnimationComponent& component, std::string const& animation) {
+    HashedString const name{animation};
+    if (auto const player = component.findAnimation(name)) {
+        if (auto* clip = findSkeletalClip(*player, name, 0)) return clip;
+    }
+    for (auto const& player : *component.mComponentAnimationPlayers) {
+        if (!player) continue;
+        if (auto* clip = findSkeletalClip(*player, name, 0)) return clip;
+    }
+    if (auto const& single = component.mPlaySingleAnimation.get()) {
+        if (auto* clip = findSkeletalClip(*single, name, 0)) return clip;
+    }
+    if (auto const& state = component.mCurrentAnimationControllerStatePlayer.get()) {
+        if (auto* clip = findSkeletalClip(*state, name, 0)) return clip;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+void ReplaySession::updateFrame() {
+    if (!mActive || !mReplayWorldJoined || !mNetworkHandler || !mReplayPlayer) return;
+    applyFlatPreview();
+    mVisualOverrides.apply();
+    resumeSeekAnimationClips();
+}
+
 void ReplaySession::resumeSeekAnimationClips() {
-    // Ticks to wait for the client to start a clip after the seek.
-    constexpr int MaxAttempts = 40;
-    if (mPendingAnimationClips.empty() || !mReplayPlayer) return;
+    // Frames to wait for the actor and for its renderer to take the clip, and how often the clip is sent again: an
+    // actor's animations are set up on its first render, and a clip sent before that is dropped.
+    constexpr int MaxAttempts   = 120;
+    constexpr int ResendAttempt = 10;
+    if (mPendingAnimationClips.empty() || !mReplayPlayer || !mNetworkHandler) return;
     auto& level = mReplayPlayer->getLevel();
     std::erase_if(mPendingAnimationClips, [&](SeekAnimationClip& clip) {
-        auto* const actor     = level.getRuntimeEntity(clip.runtimeId, false);
-        auto const  component = actor ? actor->mAnimationComponent.get() : nullptr;
-        auto const  player    = component ? component->findAnimation(HashedString{clip.animation}) : nullptr;
-        if (!player || player->getAnimationType() != ActorAnimationType::SkeletalAnimation) {
+        auto* const actor = level.getRuntimeEntity(clip.runtimeId, false);
+        if (!actor) return ++clip.attempts > MaxAttempts;
+        // The component the renderer animates; the actor's own field can hold the server group's, which never sees
+        // the clips a packet starts.
+        auto* const skeletal = findSkeletalClip(actor->getAnimationComponent(), clip.animation);
+        if (!skeletal) {
+            if (clip.packet && clip.attempts % ResendAttempt == 0) restartSeekAnimationClip(clip);
             return ++clip.attempts > MaxAttempts;
         }
-        auto&       skeletal   = static_cast<ActorSkeletalAnimationPlayer&>(*player);
-        float const elapsed    = static_cast<float>(mCurrentTick - clip.startTick) / 20.0f;
-        skeletal.mAnimTime     = elapsed;
-        skeletal.mLastAnimTime = elapsed;
+        float const elapsed     = static_cast<float>(mCurrentTick - clip.startTick) / 20.0f;
+        skeletal->mAnimTime     = elapsed;
+        skeletal->mLastAnimTime = elapsed;
         return true;
     });
+}
+
+void ReplaySession::restartSeekAnimationClip(SeekAnimationClip const& clip) {
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::TriggerAnimation);
+    if (!packet || !packet->mHandler) return;
+    auto const& recorded           = static_cast<AnimateEntityPacket const&>(*clip.packet);
+    auto&       animate            = static_cast<AnimateEntityPacket&>(*packet);
+    animate.mRuntimeIds            = std::vector{clip.runtimeId};
+    animate.mAnimation             = *recorded.mAnimation;
+    animate.mNextState             = *recorded.mNextState;
+    animate.mStopExpression        = *recorded.mStopExpression;
+    animate.mStopExpressionVersion = recorded.mStopExpressionVersion;
+    animate.mController            = *recorded.mController;
+    animate.mBlendOutTime          = recorded.mBlendOutTime;
+    mInjectingPacket.store(packet.get(), std::memory_order_release);
+    InjectionReset reset{mInjectingPacket};
+    packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 }
 
 // Per-action snapping misses entities that never moved during catch-up, so settle every recorded one here.
@@ -2614,8 +2717,6 @@ void ReplaySession::tick() {
         forceFirstPersonCamera();
         if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
         applyCloudOverride();
-        mVisualOverrides.apply();
-        resumeSeekAnimationClips();
         updateScreenPreview();
         syncFollowedPlayerHud();
 
@@ -5838,7 +5939,10 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     if (packetId == MinecraftPacketIds::TriggerAnimation && mSeekTargetTick >= 0) {
         auto const& animate = static_cast<AnimateEntityPacket&>(*packet);
         for (auto const& id : *animate.mRuntimeIds) {
-            mSeekAnimationClips.insert_or_assign(id.rawID, SeekAnimationClip{id, *animate.mAnimation, mCurrentTick});
+            mSeekAnimationClips.insert_or_assign(
+                id.rawID,
+                SeekAnimationClip{id, *animate.mAnimation, packet, mCurrentTick}
+            );
         }
     }
     // A recording with command camera samples shows those views as camera tracks; replaying the instructions would

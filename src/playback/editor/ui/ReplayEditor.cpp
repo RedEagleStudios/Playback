@@ -6,6 +6,8 @@
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/ErrorDialog.h"
 #include "playback/editor/ui/components/Widgets.h"
+#include "playback/integration/ArkeBridge.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "imgui.h"
 #include "nlohmann/json.hpp"
@@ -121,12 +123,47 @@ void ReplayEditor::setPreviewSilentWhilePaused(bool silent) {
     saveLayoutPreferences();
 }
 
+void ReplayEditor::setViewShading(ViewShading shading) {
+    mViewShading = shading;
+    saveLayoutPreferences();
+}
+
+void ReplayEditor::setRenderShaderPack(std::string pack) {
+    mRenderShaderPack       = std::move(pack);
+    mRenderShaderPackChosen = true;
+    saveLayoutPreferences();
+}
+
+void ReplayEditor::syncViewShading(bool inReplay, bool exportActive) {
+    auto& session = replay::ReplaySession::getInstance();
+    if (!inReplay) {
+        if (!mViewShadingLive) return;
+        mViewShadingLive = false;
+        session.setFlatPreview(false);
+        integration::restoreArkeShader();
+        return;
+    }
+    if (!mViewShadingLive) {
+        mViewShadingLive = true;
+        mShaderPacks     = integration::arkeShaderPacks();
+        if (!mRenderShaderPackChosen) mRenderShaderPack = integration::arkeConfiguredShader();
+    }
+    session.setFlatPreview(mViewShading == ViewShading::Flat);
+    // An export renders with the Rendered pack whatever the viewport shows.
+    static std::string const vanilla;
+    bool const               rendered = exportActive || mViewShading == ViewShading::Rendered;
+    integration::applyArkeShader(rendered ? mRenderShaderPack : vanilla);
+}
+
 void ReplayEditor::loadLayoutPreferences() {
     mDetailsWidthRatio   = 0.28f;
     mTimelineHeightRatio = 0.35f;
     mVideoAspectRatio    = 16.0f / 9.0f;
     mCameraPathVisible   = true;
     mUiScaleTier         = UiScaleTier::Auto;
+    mViewShading         = ViewShading::Rendered;
+    mRenderShaderPack.clear();
+    mRenderShaderPackChosen = false;
     mTimelinePanel.setViewPreferences(0.30f, 1.0f, 0.0f);
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
@@ -140,6 +177,15 @@ void ReplayEditor::loadLayoutPreferences() {
             auto const uiScale = config.find("uiScale");
             if (uiScale != config.end() && uiScale->is_string()) {
                 mUiScaleTier = uiScaleTierFromName(uiScale->get<std::string>());
+            }
+            auto const shading = config.find("viewShading");
+            if (shading != config.end() && shading->is_string()) {
+                mViewShading = viewShadingFromName(shading->get<std::string>());
+            }
+            auto const shaderPack = config.find("renderShaderPack");
+            if (shaderPack != config.end() && shaderPack->is_string()) {
+                mRenderShaderPack       = shaderPack->get<std::string>();
+                mRenderShaderPackChosen = true;
             }
             mDetailsWidthRatio =
                 std::clamp(readFiniteFloat(config, "detailsWidthRatio", mDetailsWidthRatio), 0.15f, 0.50f);
@@ -214,17 +260,20 @@ void ReplayEditor::saveLayoutPreferences() const {
         {"silentWhilePaused", audio::preview::isSilentWhilePaused()}
     };
 
-    nlohmann::ordered_json const config{
+    nlohmann::ordered_json config{
         {"detailsWidthRatio",   mDetailsWidthRatio                        },
         {"timelineHeightRatio", mTimelineHeightRatio                      },
         {"videoAspectRatio",    mVideoAspectRatio                         },
         {"showCameraPath",      mCameraPathVisible                        },
         {"uiScale",             std::string(uiScaleTierName(mUiScaleTier))},
+        {"viewShading",         std::string(viewShadingName(mViewShading))},
         {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()      },
         {"hud",                 std::move(hud)                            },
         {"previewAudio",        std::move(previewAudio)                   },
         {"timelineViews",       std::move(timelineViews)                  }
     };
+    // Unpicked, the pack follows Arke's own setting rather than being pinned to vanilla.
+    if (mRenderShaderPackChosen) config["renderShaderPack"] = mRenderShaderPack;
     std::ofstream output(kLayoutPreferencesPath, std::ios::trunc);
     if (output) {
         output << config.dump(2);
@@ -271,7 +320,11 @@ void ReplayEditor::openExportDialog() {
         || exporting::isExportActive(currentState.exportStatus.state)) {
         return;
     }
-    mMenuBar.openExportDialog(currentState.totalTicks, currentState.capabilities.ffmpegVideoExport);
+    mMenuBar.openExportDialog(
+        currentState.totalTicks,
+        currentState.capabilities.ffmpegVideoExport,
+        mVideoAspectRatio
+    );
 }
 
 PanelContext ReplayEditor::frameContext() {
@@ -315,6 +368,7 @@ void ReplayEditor::requestKeyframeSelection(std::string trackId, int tick) {
 
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
+    syncViewShading(state.replayVisible || exportActive, exportActive);
     if (!state.editorVisible && !exportActive) {
         if (!mActiveReplayPath.empty()) {
             mTimelineViewPreferences.insert_or_assign(

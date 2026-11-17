@@ -77,8 +77,8 @@ ViewportPanel::pickEntityAt(PanelContext const& ctx, ImVec2 const& mouse) const 
         if (!std::isfinite(ndcX) || !std::isfinite(ndcY)) return std::nullopt;
         return std::pair{
             ImVec2{
-                mVideoRect.min.x + static_cast<float>(ndcX * 0.5 + 0.5) * mVideoRect.GetWidth(),
-                mVideoRect.min.y + static_cast<float>(0.5 - ndcY * 0.5) * mVideoRect.GetHeight(),
+                mImageRect.min.x + static_cast<float>(ndcX * 0.5 + 0.5) * mImageRect.GetWidth(),
+                mImageRect.min.y + static_cast<float>(0.5 - ndcY * 0.5) * mImageRect.GetHeight(),
             },
             clip.w,
         };
@@ -156,9 +156,22 @@ void ViewportPanel::draw(PanelContext const& ctx, bool maximized) {
     ImVec2 const videoMax(videoMin.x + videoSize.x, videoMin.y + videoSize.y);
     mVideoRect = {videoMin, videoMax};
 
+    // The game renders the whole window, and an export of any shape keeps the window's vertical view (Bedrock's FOV is
+    // vertical), so the window frame is drawn at the frame's height and cut to its width: a narrower frame (9:16) is
+    // an exact centred crop; a wider one shows dark sides where the export sees past the window's edges.
+    ImVec2 const displaySize = ImGui::GetIO().DisplaySize;
+    float const  gameAspect  = displaySize.x / std::max(1.0f, displaySize.y);
+    ImVec2 const imageSize(videoSize.y * gameAspect, videoSize.y);
+    ImVec2 const imageMin(videoMin.x + (videoSize.x - imageSize.x) * 0.5f, videoMin.y);
+    mImageRect = {imageMin, {imageMin.x + imageSize.x, videoMax.y}};
+
     if (mGameTexture) {
-        drawList->AddImage(ImTextureRef(mGameTexture), videoMin, videoMax);
-        mCameraPath.draw(ctx, mVideoRect, drawList);
+        float const  shownMinX = std::max(videoMin.x, imageMin.x);
+        float const  shownMaxX = std::min(videoMax.x, imageMin.x + imageSize.x);
+        ImVec2 const uvMin((shownMinX - imageMin.x) / imageSize.x, 0.0f);
+        ImVec2 const uvMax((shownMaxX - imageMin.x) / imageSize.x, 1.0f);
+        drawList->AddImage(ImTextureRef(mGameTexture), {shownMinX, videoMin.y}, {shownMaxX, videoMax.y}, uvMin, uvMax);
+        mCameraPath.draw(ctx, mImageRect, mVideoRect, drawList);
     } else {
         mCameraPath.clear();
     }
@@ -346,9 +359,59 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     );
     widgets::itemTooltip("playback.refactorEditor.viewport.autoPreviewTooltip"_tr().c_str());
 
+    // View shading sits at the right edge as in a 3D package: three modes and the Rendered shader pack under the arrow.
+    float const unit      = metrics::iconButton();
+    float const shadingAt = width - metrics::gutter() - unit - metrics::gutter() * 2.0f - unit * 4.0f;
+    ImGui::SameLine(std::max(0.0f, shadingAt), 0.0f);
+    ImGui::SetCursorPosY((height - unit) * 0.5f);
+    {
+        using widgets::VectorIcon;
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 0.0f});
+        auto const shading = ctx.commands.viewShading();
+        auto const mode    = [&](char const* id, ViewShading value, VectorIcon icon, char const* tooltip) {
+            if (widgets::vectorIconButton(id, icon, tooltip, shading == value)) ctx.commands.setViewShading(value);
+            ImGui::SameLine();
+        };
+        mode("##shading-flat",
+             ViewShading::Flat,
+             VectorIcon::ShadingFlat,
+             "playback.refactorEditor.viewport.shadingFlat"_tr().c_str());
+        mode("##shading-lit",
+             ViewShading::Lit,
+             VectorIcon::ShadingLit,
+             "playback.refactorEditor.viewport.shadingLit"_tr().c_str());
+        mode("##shading-rendered",
+             ViewShading::Rendered,
+             VectorIcon::ShadingRendered,
+             "playback.refactorEditor.viewport.shadingRendered"_tr().c_str());
+        if (widgets::iconToggle(
+                "viewport-shader",
+                ICON_CHEVRON_DOWN,
+                "playback.refactorEditor.viewport.shaderMenu"_tr().c_str(),
+                false
+            )) {
+            widgets::openAnchoredPopup("##viewport-shader-menu");
+        }
+        ImGui::PopStyleVar();
+    }
+    if (widgets::beginAnchoredPopup("##viewport-shader-menu", unit * 6.0f)) {
+        auto const& packs   = ctx.commands.shaderPacks();
+        auto const& current = ctx.commands.renderShaderPack();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.viewport.shaderMenu"_tr().c_str());
+        ImGui::Separator();
+        if (ImGui::MenuItem("playback.refactorEditor.viewport.shaderVanilla"_tr().c_str(), nullptr, current.empty())) {
+            ctx.commands.setRenderShaderPack({});
+        }
+        for (auto const& pack : packs) {
+            if (ImGui::MenuItem(pack.c_str(), nullptr, pack == current)) ctx.commands.setRenderShaderPack(pack);
+        }
+        if (packs.empty()) ImGui::TextDisabled("%s", "playback.refactorEditor.viewport.shaderNoPacks"_tr().c_str());
+        widgets::endAnchoredPopup();
+    }
+
     // Maximize sits with the transport controls; the camera-path toggle stays in the View menu.
-    ImGui::SameLine(std::max(0.0f, width - metrics::iconButton() - metrics::gutter()));
-    ImGui::SetCursorPosY((height - metrics::iconButton()) * 0.5f);
+    ImGui::SameLine(0.0f, metrics::gutter() * 2.0f);
+    ImGui::SetCursorPosY((height - unit) * 0.5f);
     if (widgets::iconToggle(
             "viewport-info",
             ICON_INFO,

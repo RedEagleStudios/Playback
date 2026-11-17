@@ -144,7 +144,7 @@ bool ReplayExportDriver::start(
     mPhase = Phase::Rendering;
     getLogger().info(
         "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
-        "warmup={}, extraRenders={}, x264={}/crf{}, hideHud={}, audio={} ({} ch, {} {}k)",
+        "warmup={}, extraRenders={}, motionBlur={}x@{}deg, x264={}/crf{}, hideHud={}, audio={} ({} ch, {} {}k)",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -156,6 +156,8 @@ bool ReplayExportDriver::start(
         mPlan->settings.ssaa,
         mPlan->settings.warmupFrames,
         mPlan->settings.extraRenders,
+        mPlan->settings.motionBlurSamples,
+        mPlan->settings.motionBlurShutter,
         x264Preset(mPlan->settings.encodeSpeed),
         mPlan->settings.videoCrf,
         mPlan->settings.hideHud,
@@ -197,7 +199,11 @@ void ReplayExportDriver::tick() try {
             restoreReplayState();
             setExportActivityActive(false);
             mPhase = Phase::Completed;
-            getLogger().info("Video export completed: {} frames written to {}", mNextFrameIndex, mPlan->outputPath);
+            getLogger().info(
+                "Video export completed: {} frames written to {}",
+                mPlan->frameCount,
+                mPlan->outputPath
+            );
         } else if (coordinatorStatus.state == ExportState::Cancelled) {
             restoreReplayState();
             setExportActivityActive(false);
@@ -277,7 +283,7 @@ void ReplayExportDriver::tick() try {
             mWaitCharged = OfflineRenderWaitReason::None;
             ++mWaitHits[static_cast<size_t>(OfflineRenderWaitReason::None)];
             ++mNextFrameIndex;
-            if (mNextFrameIndex >= mPlan->frameCount) {
+            if (mNextFrameIndex >= mPlan->renderFrameCount()) {
                 if (!mRenderBoundary->beginDrain()) {
                     fail(ExportError::CaptureFailed, "The offline renderer could not enter its drain phase");
                     return;

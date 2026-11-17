@@ -420,14 +420,19 @@ void CameraPathOverlay::advanceBuild() {
     }
 }
 
-void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImDrawList* drawList) {
+void CameraPathOverlay::draw(
+    PanelContext const& ctx,
+    Rect const&         imageRect,
+    Rect const&         videoRect,
+    ImDrawList*         drawList
+) {
     auto const& timeline = ctx.state.cameraTimeline;
     if (!ctx.state.editorVisible || !ctx.project() || !timeline || !ctx.commands.isCameraPathVisible()) {
         clear();
         return;
     }
     if (!ctx.state.hudVisible || !ctx.cameraProjection || exporting::isExportActive(ctx.state.exportStatus.state)
-        || videoRect.GetWidth() <= 0.0f || videoRect.GetHeight() <= 0.0f) {
+        || videoRect.GetWidth() <= 0.0f || videoRect.GetHeight() <= 0.0f || imageRect.GetWidth() <= 0.0f) {
         return;
     }
     auto const       ticks = neighborTicks(*timeline, ctx.state.currentTick);
@@ -438,7 +443,7 @@ void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImD
     auto const   dimension = timeline->dimensionSegmentForTick(ctx.state.currentTick);
     double const nearW     = std::max(0.001, static_cast<double>(ctx.cameraProjection->nearClipW));
     float const  aspect    = videoRect.GetWidth() / videoRect.GetHeight();
-    PathPainter  painter(drawList, ctx.cameraProjection->viewProjection, nearW, videoRect);
+    PathPainter  painter(drawList, ctx.cameraProjection->viewProjection, nearW, imageRect);
 
     bool const  building = isBuilding() && !mPreviousPolylines.empty();
     auto const& lines    = building ? mPreviousPolylines : mPolylines;

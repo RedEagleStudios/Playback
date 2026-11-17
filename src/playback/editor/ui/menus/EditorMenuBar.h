@@ -10,7 +10,8 @@ namespace playback::editor::ui {
 class EditorMenuBar {
 public:
     void               draw(PanelContext const& ctx);
-    void               openExportDialog(int totalTicks, bool ffmpegAvailable);
+    // frameAspect is the viewport's frame shape; an output size of another shape is moved onto it.
+    void               openExportDialog(int totalTicks, bool ffmpegAvailable, float frameAspect);
     [[nodiscard]] bool isAnyMenuOpen() const;
 
     // The timeline draws these as in/out markers and can drag them; -1 means "whole replay".
@@ -37,6 +38,9 @@ private:
     int  mExportSsaa{0};
     int  mExportWarmupFrames{60};
     int  mExportExtraRenders{0};
+    // Indices into the motion blur sample and shutter choices: off, 180°.
+    int  mExportMotionBlur{0};
+    int  mExportShutter{1};
     int  mExportEncodeSpeed{0};
     int  mExportCrf{18};
     bool mExportHideHud{false};

@@ -61,6 +61,9 @@ constexpr uint32_t MaxExportSsaa       = 4;
 constexpr uint64_t MaxExportPixels     = (512ull * 1024 * 1024) / 4;
 // Noise falls roughly with the square root of the pass count, so each doubling costs twice the render time.
 constexpr uint32_t MaxExportExtraRenders = 1'000;
+// Each sample is a full render, so 16 already makes an export sixteen times slower.
+constexpr uint32_t MaxMotionBlurSamples = 16;
+constexpr uint32_t MaxMotionBlurShutter = 360;
 
 // The supersampled surface, not the output, is what the renderer and the capture path have to hold.
 [[nodiscard]] constexpr bool supersampleFits(uint32_t width, uint32_t height, uint32_t ssaa) {
@@ -85,6 +88,11 @@ struct ExportSettings {
     uint32_t warmupFrames{60};
     // Extra renders per frame so ray-traced temporal accumulation can settle; each one costs a full render.
     uint32_t extraRenders{0};
+    // Motion blur: renders per output frame, spread evenly over the open shutter and averaged; 1 is off.
+    uint32_t motionBlurSamples{1};
+    // Shutter angle in degrees: the share of each frame interval, from the frame's own time onward, the samples
+    // cover. 180 is the film look; 360 smears across the whole interval.
+    uint32_t motionBlurShutter{180};
     // MP4 only; the defaults are what the writer used before these were configurable.
     VideoEncodeSpeed encodeSpeed{VideoEncodeSpeed::Quality};
     uint32_t         videoCrf{18};
@@ -154,12 +162,17 @@ struct ExportFramePlan {
 struct CompiledExportPlan {
     ExportSettings        settings;
     std::filesystem::path outputPath;
+    // Frames written to the output.
     uint64_t              frameCount{};
     int64_t               replayTickStartNumerator{};
     int64_t               replayTickStepNumerator{};
     int64_t               replayTickDenominator{1};
 
-    [[nodiscard]] std::optional<ExportFramePlan> frame(uint64_t frameIndex) const;
+    // Frames rendered: settings.motionBlurSamples per output frame, which the coordinator averages into one.
+    [[nodiscard]] uint64_t renderFrameCount() const { return frameCount * settings.motionBlurSamples; }
+    // Render frame renderIndex: sample (renderIndex % samples) of output frame (renderIndex / samples). Its ticket
+    // carries the render index and the output frame's presentation time.
+    [[nodiscard]] std::optional<ExportFramePlan> frame(uint64_t renderIndex) const;
 };
 
 struct ExportPlanCompileResult {

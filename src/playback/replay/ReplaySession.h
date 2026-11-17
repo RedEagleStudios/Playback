@@ -34,6 +34,7 @@ class LevelChunkPacket;
 class Actor;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
+class Packet;
 class Player;
 class SerializedSkinRef;
 class CompoundTag;
@@ -280,6 +281,13 @@ private:
     uint64_t                                    mCompletedDimensionGeneration = 0;
     std::chrono::steady_clock::time_point       mDimensionTransitionStartedAt{};
 
+    // The project's graphics mode (setGraphicsOverride); the Flat view (setFlatPreview) puts Simple over it.
+    std::optional<state::editing::model::GraphicsStyle> mProjectGraphics;
+    // The viewport's Flat view, whether the observer holds its night vision, and the ticks since it was renewed.
+    std::atomic<bool> mFlatPreview{};
+    bool              mFlatNightVision{};
+    int               mFlatNightVisionAge{};
+
     std::chrono::steady_clock::time_point mChunkInjectionStartedAt{};
     std::vector<double>                   mChunkInjectionDurationsMs;
     double                                mChunkPlanPreparationMs{};
@@ -323,13 +331,16 @@ private:
     std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
     std::unordered_set<int32_t>                                 mUnknownConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
-    // A /playanimation clip that a seek's catch-up started: the client plays it from 0, so its clock is moved on to the
-    // time it had played by the recording. The last clip per entity runtime ID, then the ones still to resume.
+    // A /playanimation clip that a seek's catch-up started. The client drops clips sent before the actor's renderer has
+    // set up its animations, and plays the rest from 0, so its packet is sent again until the actor holds it and its
+    // clock is then moved on to the time it had played by the recording. The last clip per entity runtime ID, then the
+    // ones still to resume.
     struct SeekAnimationClip {
-        ActorRuntimeID runtimeId;
-        std::string    animation;
-        int            startTick{};
-        int            attempts{};
+        ActorRuntimeID          runtimeId;
+        std::string             animation;
+        std::shared_ptr<Packet> packet;
+        int                     startTick{};
+        int                     attempts{};
     };
     std::unordered_map<uint64_t, SeekAnimationClip>             mSeekAnimationClips;
     std::vector<SeekAnimationClip>                              mPendingAnimationClips;
@@ -543,6 +554,8 @@ private:
 
     // Align the server authority with the client so a paused replay isn't pulled back.
     void syncObserverServerPosition(::Vec3 const& feetPosition, ::Vec2 const& rotation);
+    // The Flat view: Simple graphics and night vision on the observer, both off during an export.
+    void applyFlatPreview();
 
     [[nodiscard]] bool clearReplayObjectives();
 
@@ -556,6 +569,8 @@ private:
 
     void settleAfterSeek();
 
+    // Sends a clip a seek's catch-up started to its actor again.
+    void restartSeekAnimationClip(SeekAnimationClip const& clip);
     // Moves the clips a seek's catch-up started on to the time they had played by the recording, once they exist.
     void resumeSeekAnimationClips();
 
@@ -614,6 +629,9 @@ public:
     void tick();
 
     void updateControlPlane();
+    // Every frame on the client thread: a paused replay runs no ticks, yet the viewport's shading and graphics follow
+    // the editor at once, and the clips a seek started need the frames after its paused landing to reach their actors.
+    void updateFrame();
 
     [[nodiscard]] bool isActive() const { return mActive; }
     [[nodiscard]] bool isReadyForExport() const {
@@ -647,8 +665,10 @@ public:
     void setWorldOverrides(std::optional<int> timeOfDay, bool freezeTime, bool hideClouds);
     // The project's graphics mode; nullopt keeps the viewer's own. Follows the project while the replay plays.
     void setGraphicsOverride(std::optional<state::editing::model::GraphicsStyle> graphics) {
-        mVisualOverrides.requestGraphics(graphics);
+        mProjectGraphics = graphics;
     }
+    // The viewport's Flat view: Simple graphics and full brightness while editing. Exports clear it. Any thread.
+    void setFlatPreview(bool flat) noexcept { mFlatPreview.store(flat, std::memory_order_release); }
     [[nodiscard]] std::shared_ptr<std::vector<state::editing::model::GlobalPack> const> installedGlobalPacks() const {
         return mVisualOverrides.installedPacks();
     }

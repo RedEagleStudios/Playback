@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Export motion blur: **Video > Motion blur** renders each output frame 4, 8 or 16 times spread over the open shutter (**Shutter** 90°, 180°, 270° or 360°) and averages them, so movement smears like a film camera. The preview stays sharp. Each sample is a full render. The control API's `exportSettings` takes `motionBlurSamples` and `motionBlurShutter`.
+- The viewport's frame shape is a true crop of the game view: at 9:16 the preview shows the centre of the frame at its real proportions instead of squeezing the whole window into it, and camera paths and entity picking follow the crop. Export's resolution presets follow the frame shape (1080p is 1080x1920 at 9:16), and an output size of another shape is moved onto it when the dialog opens.
+- Viewport shading, as in a 3D package: three buttons at the right of the viewport toolbar switch the preview between **Flat** (Simple graphics, full brightness, no shadows or shader pack: the lightest to edit in), **Lit** (the project's graphics with the game's lighting and shadows, no shader pack) and **Rendered** (the shader pack picked under the arrow beside them, or vanilla). Exports always render with the project's graphics and the Rendered pack. Packs are Arke's; Playback switches Arke's own setting while a replay is open and puts it back afterwards. The choice is saved with the editor layout.
+
+### Fixed
+
+- Cinematic actors that keep their model on an anchor (RE Cinema scenes) no longer pop and jump in the preview while the replay plays. The replay poses now hold for the whole graphics update, as they do in exports, so the animations that place those models read the same position the models are drawn at.
+- After a seek, mobs animated by `/playanimation` or scripts (RE Cinema scenes) show the pose the recording had at that tick instead of restarting their clip from the start or standing in their rest pose. The paused landing runs no replay ticks, and an actor's renderer only takes clips after its first frame, so the clips the seek's catch-up started are now sent again each frame until the actor holds them, then moved on to the time they had played. Flat shading and the project's graphics also follow the editor while paused.
+
+### Known issues
+
+- After a seek, an RE Cinema scene's player actor (`re_cinema:<scene>_player`) can show unanimated, drawn upside down or misplaced and without its armor, until the replay plays into its next clip. Its animation component stays empty after the seek, so the resent clip never takes; mobs are not affected, and playing through and exports are. Workaround: seek a little before the shot and play into it.
+
 ## [0.4.0-mc26.60-re.4] - 2026-11-17
 
 RedEagleStudios fork release, built from `re-main`.

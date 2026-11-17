@@ -11,6 +11,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -299,6 +300,22 @@ void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, I
         );
         break;
     }
+    case VectorIcon::ShadingFlat:
+        drawList->AddCircleFilled(centre, h * 1.05f, color, 32);
+        break;
+    case VectorIcon::ShadingLit: {
+        // The lit half filled, the shadow half only outlined.
+        float const quarter = std::numbers::pi_v<float> * 0.5f;
+        drawList->AddCircle(centre, h * 1.05f - stroke * 0.5f, color, 32, stroke);
+        drawList->PathArcTo(centre, h * 1.05f, -quarter, quarter, 16);
+        drawList->PathFillConvex(color);
+        break;
+    }
+    case VectorIcon::ShadingRendered:
+        // A sphere's outline with its shaded body pulled towards the light's far side.
+        drawList->AddCircle(centre, h * 1.05f - stroke * 0.5f, color, 32, stroke);
+        drawList->AddCircleFilled({centre.x + h * 0.25f, centre.y + h * 0.25f}, h * 0.68f, color, 32);
+        break;
     }
 }
 

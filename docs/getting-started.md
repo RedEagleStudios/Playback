@@ -127,6 +127,8 @@ The inspector's **Preview** page selects the visible chat, boss bar, title, scor
 
 Preview **Mute**, **Volume**, and **Silent while paused** are saved with the editor layout and never change exported audio. **Silent while paused** is on by default and suppresses world sounds triggered while paused or seeking, rather than changing the recording.
 
+The three shading buttons at the right of the viewport toolbar set how the preview draws the replay, as in a 3D package. **Flat** turns off lighting, shadows and shader packs and switches to Simple graphics: the lightest view to edit in, with caves fully lit. **Lit** shows the project's graphics with the game's own lighting and shadows, without a shader pack. **Rendered** shows the shader pack picked under the arrow beside them, or vanilla when none is picked. Exports always render with the project's graphics and the Rendered pack, whatever the viewport shows. Shader packs come from the Arke mod's `shaderpacks` folder; Playback switches Arke's own setting while a replay is open and puts it back when the replay closes.
+
 ## Keyboard Shortcuts
 
 **Help > Keyboard Shortcuts** lists the current bindings in the editor.
@@ -162,7 +164,7 @@ Keyboard input belongs to the editor while it is open. Hold the left mouse butto
 Open **File > Export...** in the replay editor. Settings are arranged on four pages. Export buttons stay visible; on short windows the summary hides before the settings page scrolls:
 
 - **General**: output name and folder, MP4 or PNG sequence, frame rate, and start/end ticks. The name is used verbatim; existing files get numbered suffixes. Use the playhead buttons or the timeline's I/O shortcuts to set a short range before testing a long export. Start with 30 FPS.
-- **Video**: output resolution, SSAA, warm-up frames, **Hide HUD**, MP4 encode speed, and CRF. Start with 1x SSAA. Warm-up runs again after dimension changes.
+- **Video**: output resolution, SSAA, motion blur and shutter, warm-up frames, **Hide HUD**, MP4 encode speed, and CRF. Start with 1x SSAA. Motion blur renders every frame 4, 8 or 16 times across the open shutter (180° is the film look) and averages them; the preview stays sharp, and each sample is a full render, so 8x makes the export about eight times slower. The resolution presets follow the viewport's frame shape (1080p is 1080x1920 at 9:16). Warm-up runs again after dimension changes.
 - **Audio**: enable or disable game audio, choose mono or stereo, and select AAC (default), Opus, or FLAC for MP4. AAC and Opus offer 128/192/256/320 kbps; FLAC is lossless and has no bitrate setting. PNG sequences use an uncompressed sidecar `.audio.wav` when audio is enabled. Some players cannot play Opus or FLAC in MP4; choose AAC for wider compatibility.
 - **Advanced**: extra renders (default 0). Extra renders draw each output frame additional times without saving those passes, helping temporal effects settle at the cost of a full render per pass. Client ticks are accelerated automatically; there is no separate Accelerate client option.
 

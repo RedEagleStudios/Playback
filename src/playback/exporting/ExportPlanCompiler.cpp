@@ -127,8 +127,11 @@ std::filesystem::path findAvailableExportPath(std::filesystem::path const& desir
     return desired;
 }
 
-std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t frameIndex) const {
-    if (frameIndex >= frameCount) return std::nullopt;
+std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t renderIndex) const {
+    uint64_t const samples = settings.motionBlurSamples;
+    if (samples == 0 || renderIndex >= renderFrameCount()) return std::nullopt;
+    uint64_t const frameIndex = renderIndex / samples;
+    auto const     sample     = static_cast<int64_t>(renderIndex % samples);
 
     int64_t frameOffset = 0;
     if (frameIndex > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) return std::nullopt;
@@ -138,6 +141,23 @@ std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t frameIndex) co
 
     int64_t replayTickNumerator = 0;
     if (!checkedSignedAdd(replayTickStartNumerator, frameOffset, replayTickNumerator)) return std::nullopt;
+    int64_t tickDenominator = replayTickDenominator;
+    if (samples > 1) {
+        // Sample k of n sits k/n of the way through the open shutter, the first on the frame's own time. Exact over
+        // denominator * n * 360, so no sample drifts from its frame.
+        int64_t const scale        = static_cast<int64_t>(samples) * 360;
+        int64_t       sampleOffset = 0;
+        if (!checkedSignedMultiply(replayTickNumerator, scale, replayTickNumerator)
+            || !checkedSignedMultiply(
+                replayTickStepNumerator,
+                sample * static_cast<int64_t>(settings.motionBlurShutter),
+                sampleOffset
+            )
+            || !checkedSignedAdd(replayTickNumerator, sampleOffset, replayTickNumerator)
+            || !checkedSignedMultiply(replayTickDenominator, scale, tickDenominator)) {
+            return std::nullopt;
+        }
+    }
 
     int64_t ptsNumerator = 0;
     if (!checkedSignedMultiply(static_cast<int64_t>(frameIndex), settings.frameRate.denominator, ptsNumerator)) {
@@ -146,8 +166,8 @@ std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t frameIndex) co
 
     ExportFramePlan result;
     result.replayTickNumerator   = replayTickNumerator;
-    result.replayTickDenominator = replayTickDenominator;
-    result.ticket.frameIndex     = frameIndex;
+    result.replayTickDenominator = tickDenominator;
+    result.ticket.frameIndex     = renderIndex;
     result.ticket.ptsNumerator   = ptsNumerator;
     result.ticket.ptsDenominator = settings.frameRate.numerator;
     return result;
@@ -199,6 +219,10 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     }
     if (settings.extraRenders > MaxExportExtraRenders) {
         return failure(ExportError::InvalidSettings, "The export extra render count is too large");
+    }
+    if (settings.motionBlurSamples == 0 || settings.motionBlurSamples > MaxMotionBlurSamples
+        || settings.motionBlurShutter == 0 || settings.motionBlurShutter > MaxMotionBlurShutter) {
+        return failure(ExportError::InvalidSettings, "The motion blur sample count or shutter angle is invalid");
     }
     if (settings.videoCrf > MaxExportCrf || settings.encodeSpeed > VideoEncodeSpeed::Fastest) {
         return failure(ExportError::InvalidSettings, "The video encoder quality or speed setting is invalid");
@@ -260,6 +284,9 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     plan.replayTickStartNumerator = replayStartNumerator;
     plan.replayTickStepNumerator  = replayStepNumerator;
     plan.replayTickDenominator    = plan.settings.frameRate.numerator;
+    if (!plan.frame(plan.renderFrameCount() - 1)) {
+        return failure(ExportError::InvalidTimeline, "The export timeline is too large for its motion blur samples");
+    }
     return ExportPlanCompileResult{std::move(plan), ExportError::None, {}};
 }
 

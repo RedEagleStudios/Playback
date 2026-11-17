@@ -339,6 +339,11 @@
                 "ssaaHint": "按输出尺寸的倍数渲染后缩小，边缘更清晰但导出更慢。超出显卡上限的倍率会被禁用。",
                 "warmupHint": "在第一帧采集前渲染并丢弃的帧数，用于等待区块与光照稳定。",
                 "extraRendersHint": "保存每一帧之前额外渲染并丢弃的次数。0 表示每帧只渲染一次，大多数导出用 0 即可：光追和灵动视效的计时跟随回放时间，降噪器也会跨帧持续累积。光照变化后画面仍有噪点或拖影时再调大：额外渲染停在同一时刻，只让降噪和光照累积多走几步，所以这类过渡在视频里会更快结束。每加 1 就多一次完整渲染，导出时间成倍增加。",
+                "motionBlur": "动态模糊",
+                "motionBlurHint": "在快门开启期间把每一帧渲染多次并取平均，让运动像电影摄影机一样拖影。关闭时每帧保持清晰。每个采样都是一次完整渲染，8 个采样约让导出慢八倍。预览画面始终不加模糊。",
+                "motionBlurOff": "关闭",
+                "shutter": "快门角度",
+                "shutterHint": "采样覆盖每帧间隔的比例。180° 是常见的电影效果；360° 拖满整个间隔，90° 拖影短而清晰。",
                 "timelineSummary": "时间范围",
                 "captureSummary": "采集设置",
                 "encodeSummary": "编码设置",
@@ -479,7 +484,13 @@
                 "autoPreviewTooltip": "选中相机或关键帧时自动切换预览相机",
                 "infoOverlay": "信息叠加",
                 "position": "位置",
-                "rotation": "朝向"
+                "rotation": "朝向",
+                "shadingFlat": "平面：无光照、阴影与光影，编辑最流畅",
+                "shadingLit": "光照：游戏自身的光照与阴影，无光影",
+                "shadingRendered": "渲染：所选光影包，与导出效果一致",
+                "shaderMenu": "渲染视图与导出使用的光影包",
+                "shaderVanilla": "原版（无光影）",
+                "shaderNoPacks": "没有光影包：请安装 Arke 并将光影包放入其 shaderpacks 文件夹"
             },
             "playerPicker": {
                 "searchHint": "搜索玩家名或 UUID",

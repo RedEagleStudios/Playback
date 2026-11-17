@@ -15,7 +15,8 @@ namespace playback::editor::ui {
 
 class CameraPathOverlay {
 public:
-    void               draw(PanelContext const& ctx, Rect const& videoRect, ImDrawList* drawList);
+    // imageRect is where the whole game frame sits (the projection maps onto it); drawing is clipped to videoRect.
+    void draw(PanelContext const& ctx, Rect const& imageRect, Rect const& videoRect, ImDrawList* drawList);
     void               clear();
     [[nodiscard]] bool isBuilding() const { return mNextLine < mPolylines.size(); }
 

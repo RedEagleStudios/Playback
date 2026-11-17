@@ -263,11 +263,13 @@ exporting::ExportSettings exportFrom(json const& node) {
         settings.resolutionX = (*resolution)[0].get<uint32_t>();
         settings.resolutionY = (*resolution)[1].get<uint32_t>();
     }
-    settings.ssaa         = node.value("ssaa", settings.ssaa);
-    settings.warmupFrames = node.value("warmupFrames", settings.warmupFrames);
-    settings.extraRenders = node.value("extraRenders", settings.extraRenders);
-    settings.audio        = node.value("audio", settings.audio);
-    settings.hideHud      = node.value("hideHud", settings.hideHud);
+    settings.ssaa              = node.value("ssaa", settings.ssaa);
+    settings.warmupFrames      = node.value("warmupFrames", settings.warmupFrames);
+    settings.extraRenders      = node.value("extraRenders", settings.extraRenders);
+    settings.motionBlurSamples = node.value("motionBlurSamples", settings.motionBlurSamples);
+    settings.motionBlurShutter = node.value("motionBlurShutter", settings.motionBlurShutter);
+    settings.audio             = node.value("audio", settings.audio);
+    settings.hideHud           = node.value("hideHud", settings.hideHud);
     return settings;
 }
 

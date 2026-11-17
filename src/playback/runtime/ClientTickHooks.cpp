@@ -193,6 +193,7 @@ LL_TYPE_INSTANCE_HOOK(
     editor::graphics::updateReplayMouseOwnership(*this);
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
+    replay.updateFrame();
     audio::preview::update(
         replay.isActive(),
         replay.isPaused(),
