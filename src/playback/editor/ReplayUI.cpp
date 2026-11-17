@@ -1,5 +1,6 @@
 ﻿#include "ReplayUI.h"
 
+#include "playback/editor/control/ControlServer.h"
 #include "playback/editor/graphics/D3D12Hooks.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
@@ -63,9 +64,13 @@ bool hookReplayUI(bool enable) {
             );
         }
         gUiHooked.store(true, std::memory_order_release);
+        if (auto const& control = Playback::getInstance().getConfig().control; control.enabled) {
+            control::startControlServer(gContext, control.port);
+        }
         return true;
     }
 
+    control::stopControlServer();
     gUiHooked.store(false, std::memory_order_release);
     editor::graphics::setReplayUIActive(false);
     editor::graphics::setReplayMouseInputActive(false);

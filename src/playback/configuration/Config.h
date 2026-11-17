@@ -20,6 +20,13 @@ struct RecordConfigStruct {
     int localPlayerUpdatesPerSecond = 20;
 };
 
+// A local HTTP API that drives the replay editor like its UI; see editor/control/ControlServer.h. It listens on
+// 127.0.0.1 only, so only programs already running as this user on this machine can reach it.
+struct ControlConfigStruct {
+    bool enabled = true;
+    int  port    = 7878;
+};
+
 // Rounds to the nearest supported rate.
 constexpr int clampLocalPlayerUpdatesPerSecond(int rate) {
     int const step = (rate + 10) / 20 * 20;
@@ -32,6 +39,7 @@ struct Config {
 
     CommandStruct      command;
     RecordConfigStruct record;
+    ControlConfigStruct control;
 };
 
 } // namespace playback::configuration

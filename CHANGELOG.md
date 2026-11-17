@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A local HTTP API on `127.0.0.1:7878` drives the replay editor like its UI, so scripts and tools can control a replay without the mouse or keyboard: `GET /state` returns the editor state as JSON (playhead, tracks and keys, world and follow settings, players, replay list, export), `GET /actions` lists the action types, and `POST /action` runs one, e.g. `{"type": "Seek", "tick": 1700}`. It listens on the loopback address only and is on by default (`control.enabled`, `control.port`).
+
 ## [0.4.0-mc26.60-re.1] - 2026-11-17
 
 RedEagleStudios fork release, built from `re-main`.

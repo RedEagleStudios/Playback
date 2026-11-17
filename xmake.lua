@@ -53,6 +53,7 @@ add_requires("xxhash")
 add_requires("mbedtls v3.6.7")
 add_requires("libzip")
 add_requires("imgui v1.92.7", {configs = {dx11 = true, dx12 = true}})
+add_requires("cpp-httplib")
 if not has_config("ffmpeg_exe") then
     add_requires("playback-ffmpeg 7.1", {
         configs = {
@@ -117,7 +118,8 @@ target("playback")
     add_packages("mbedtls")
     add_packages("libzip")
     add_packages("imgui")
-    add_syslinks("d3d11", "d3d12", "dxgi", "dcomp", "d3dcompiler", "windowscodecs", "ole32", "comdlg32", "shell32", "gdi32")
+    add_packages("cpp-httplib")
+    add_syslinks("d3d11", "d3d12", "dxgi", "dcomp", "d3dcompiler", "windowscodecs", "ole32", "comdlg32", "shell32", "gdi32", "ws2_32")
     set_kind("shared")
     set_languages("c++20")
     if is_mode("debug") then
