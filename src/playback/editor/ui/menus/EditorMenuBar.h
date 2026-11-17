@@ -13,6 +13,7 @@ public:
     // frameAspect is the viewport's frame shape; an output size of another shape is moved onto it.
     void               openExportDialog(int totalTicks, bool ffmpegAvailable, float frameAspect);
     [[nodiscard]] bool isAnyMenuOpen() const;
+    [[nodiscard]] bool isExportDialogOpen() const { return mExportDialogOpen; }
 
     // The timeline draws these as in/out markers and can drag them; -1 means "whole replay".
     [[nodiscard]] int exportStartTick() const { return mExportStartTick; }

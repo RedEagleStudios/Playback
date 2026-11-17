@@ -134,7 +134,7 @@ void ReplayEditor::setRenderShaderPack(std::string pack) {
     saveLayoutPreferences();
 }
 
-void ReplayEditor::syncViewShading(bool inReplay, bool exportActive) {
+void ReplayEditor::syncViewShading(bool inReplay, bool exportLook) {
     auto& session = replay::ReplaySession::getInstance();
     if (!inReplay) {
         if (!mViewShadingLive) return;
@@ -148,10 +148,12 @@ void ReplayEditor::syncViewShading(bool inReplay, bool exportActive) {
         mShaderPacks     = integration::arkeShaderPacks();
         if (!mRenderShaderPackChosen) mRenderShaderPack = integration::arkeConfiguredShader();
     }
-    session.setFlatPreview(mViewShading == ViewShading::Flat);
-    // An export renders with the Rendered pack whatever the viewport shows.
+    session.setFlatPreview(mViewShading == ViewShading::Flat && !exportLook);
+    // An export renders with the Rendered pack whatever the viewport shows. It goes on as the export dialog opens: a
+    // pack switched on as the export starts captures its first seconds dark and smeared while its exposure and
+    // temporal buffers build up from black.
     static std::string const vanilla;
-    bool const               rendered = exportActive || mViewShading == ViewShading::Rendered;
+    bool const               rendered = exportLook || mViewShading == ViewShading::Rendered;
     integration::applyArkeShader(rendered ? mRenderShaderPack : vanilla);
 }
 
@@ -368,7 +370,7 @@ void ReplayEditor::requestKeyframeSelection(std::string trackId, int tick) {
 
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
-    syncViewShading(state.replayVisible || exportActive, exportActive);
+    syncViewShading(state.replayVisible || exportActive, exportActive || mMenuBar.isExportDialogOpen());
     if (!state.editorVisible && !exportActive) {
         if (!mActiveReplayPath.empty()) {
             mTimelineViewPreferences.insert_or_assign(

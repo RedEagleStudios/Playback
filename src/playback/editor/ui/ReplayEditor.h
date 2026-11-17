@@ -151,8 +151,9 @@ private:
     void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
     void updateExitHold();
-    // Puts the viewport's shading in place; an export always renders with the Rendered pack.
-    void syncViewShading(bool inReplay, bool exportActive);
+    // Puts the viewport's shading in place; while the export dialog is open or an export runs, the viewport shows the
+    // export's look (project graphics, Rendered pack).
+    void syncViewShading(bool inReplay, bool exportLook);
 
     friend class EditMode;
     friend class RenderMode;
