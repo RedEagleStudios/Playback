@@ -20,9 +20,11 @@ struct Entry {
     uintptr_t    rva;
 };
 
-// Minecraft.Windows.exe 1.26.60.5.
+// Minecraft.Windows.exe 1.26.60.5. Loaders append import sections to the image (PeEditor and
+// LeviLauncher each add one), which grows SizeOfImage without moving any of the RVAs below, so
+// only the unpatched size is a lower bound.
 constexpr DWORD ImageTimeDateStamp = 0x6AD79EE4;
-constexpr DWORD ImageSize          = 0x13847000;
+constexpr DWORD OriginalImageSize  = 0x1383B000;
 
 constexpr Entry Entries[] = {
     {GameFunction::HasFinishedLoading,                       0x6950D20},
@@ -65,7 +67,8 @@ uintptr_t supportedImageBase() {
     auto const base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     auto const dos  = reinterpret_cast<IMAGE_DOS_HEADER const*>(base);
     auto const nt   = reinterpret_cast<IMAGE_NT_HEADERS64 const*>(base + dos->e_lfanew);
-    if (nt->FileHeader.TimeDateStamp == ImageTimeDateStamp && nt->OptionalHeader.SizeOfImage == ImageSize) return base;
+    if (nt->FileHeader.TimeDateStamp == ImageTimeDateStamp && nt->OptionalHeader.SizeOfImage >= OriginalImageSize)
+        return base;
     Playback::getInstance().getSelf().getLogger().error("This Playback build needs Minecraft 1.26.60.5");
     return 0;
 }

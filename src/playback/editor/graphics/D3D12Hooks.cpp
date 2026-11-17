@@ -846,14 +846,54 @@ bool resolveHookTargets(
     swapChainDesc.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
     swapChainDesc.AlphaMode   = DXGI_ALPHA_MODE_PREMULTIPLIED;
 
+    // Destroyed after swapChain (reverse declaration order): the HWND fallback's window must outlive it.
+    struct DummyWindow {
+        HWND handle{};
+        ~DummyWindow() {
+            if (handle) DestroyWindow(handle);
+        }
+    } dummyWindow;
+
     ComPtr<IDXGISwapChain1> swapChain;
     result = factory->CreateSwapChainForComposition(commandQueue.Get(), &swapChainDesc, nullptr, &swapChain);
     if (FAILED(result)) {
-        getLogger().error(
-            "Unable to create the dummy DXGI swap chain for replay timeline hooks (HRESULT=0x{:08X})",
-            static_cast<uint32_t>(result)
+        // Wine/Proton DXGI has no DirectComposition swap chains (E_NOTIMPL); a hidden window's swap chain
+        // shares the vtable the game's own HWND swap chain uses there.
+        HRESULT const compositionResult = result;
+        dummyWindow.handle = CreateWindowExW(
+            0,
+            L"STATIC",
+            L"Playback DXGI probe",
+            WS_OVERLAPPED,
+            0,
+            0,
+            2,
+            2,
+            nullptr,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            nullptr
         );
-        return false;
+        if (dummyWindow.handle) {
+            swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+            result                  = factory->CreateSwapChainForHwnd(
+                commandQueue.Get(),
+                dummyWindow.handle,
+                &swapChainDesc,
+                nullptr,
+                nullptr,
+                &swapChain
+            );
+        }
+        if (FAILED(result) || !dummyWindow.handle) {
+            getLogger().error(
+                "Unable to create the dummy DXGI swap chain for replay timeline hooks (composition HRESULT=0x{:08X}, "
+                "window HRESULT=0x{:08X})",
+                static_cast<uint32_t>(compositionResult),
+                static_cast<uint32_t>(dummyWindow.handle ? result : HRESULT_FROM_WIN32(GetLastError()))
+            );
+            return false;
+        }
     }
 
     ComPtr<IDXGISwapChain3> swapChain3;
