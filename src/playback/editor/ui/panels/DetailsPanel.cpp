@@ -1,6 +1,7 @@
 ﻿#include "DetailsPanel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/EasingCurveEditor.h"
 #include "playback/editor/ui/components/EasingPresetPicker.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/PropertyControls.h"
@@ -71,6 +72,20 @@ std::string easingPresetPreview(state::editing::model::CameraKeyframe const& key
     if (auto const preset = keyEasingPreset(key))
         return easingPresetName(state::editing::model::EasingPresets[*preset]);
     return "playback.refactorEditor.details.easingPresetCustom"_tr();
+}
+
+// The keys' easing as picked in the combo: a preset is a Cubic Bezier curve; None goes back to Smooth, the default.
+state::EditorAction easingAction(std::vector<state::editing::model::KeyframeRef> refs, EasingPick const& pick) {
+    using state::editing::model::CameraInterpolationType;
+    state::EditorAction action{state::EditorActionType::SetKeyframesInterpolation};
+    action.keyframeRefs = std::move(refs);
+    if (pick.preset) {
+        action.kind           = static_cast<int>(CameraInterpolationType::CubicBezier);
+        action.bezierControls = std::array{pick.preset->control1, pick.preset->control2};
+    } else {
+        action.kind = static_cast<int>(CameraInterpolationType::Smooth);
+    }
+    return action;
 }
 
 std::string categoryName(state::editing::model::SubActorCategory category) {
@@ -573,16 +588,16 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
         ImGui::SetNextItemWidth(-1.0f);
         std::string const presetPreview =
             presetMixed || !sharedPresetPreview ? "playback.refactorEditor.details.mixed"_tr() : *sharedPresetPreview;
+        bool const noneShared =
+            !mixed && shared
+            && *shared != static_cast<int>(state::editing::model::CameraInterpolationType::CubicBezier);
         if (auto const picked = drawEasingPresetCombo(
                 "##batch-easing-preset",
                 presetPreview.c_str(),
-                presetMixed ? std::nullopt : sharedPreset
+                presetMixed ? std::nullopt : sharedPreset,
+                noneShared
             )) {
-            EditorAction action{EditorActionType::SetKeyframesInterpolation};
-            action.keyframeRefs   = refs;
-            action.kind           = static_cast<int>(state::editing::model::CameraInterpolationType::CubicBezier);
-            action.bezierControls = std::array{picked->control1, picked->control2};
-            ctx.submitAction(std::move(action));
+            ctx.submitAction(easingAction(refs, *picked));
         }
         property::separator();
         if (property::actionButton(
@@ -738,20 +753,37 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     if (auto const picked = drawEasingPresetCombo(
                             "##easing-preset",
                             easingPresetPreview(key->second).c_str(),
-                            preset
+                            preset,
+                            key->second.interpolationType != state::editing::model::CameraInterpolationType::CubicBezier
                         )) {
-                        EditorAction action{EditorActionType::SetKeyframesInterpolation};
-                        action.keyframeRefs = {
-                            {camera->id, originalTick, std::nullopt}
-                        };
-                        action.kind = static_cast<int>(state::editing::model::CameraInterpolationType::CubicBezier);
-                        action.bezierControls = std::array{picked->control1, picked->control2};
-                        submit(std::move(action));
+                        submit(easingAction(
+                            {
+                                {camera->id, originalTick, std::nullopt}
+                        },
+                            *picked
+                        ));
                     }
                 }
                 ImGui::EndTable();
             }
             ImGui::PopStyleVar();
+            if (!person
+                && key->second.interpolationType == state::editing::model::CameraInterpolationType::CubicBezier) {
+                // A key's curve eases the move from it to the next key.
+                property::separator();
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.easingCurve"_tr().c_str());
+                if (auto const edit =
+                        drawEasingCurveEditor("##easing-curve", key->second.bezierCtrl1, key->second.bezierCtrl2);
+                    edit && edit->committed) {
+                    EditorAction action{EditorActionType::SetKeyframesInterpolation};
+                    action.keyframeRefs = {
+                        {camera->id, originalTick, std::nullopt}
+                    };
+                    action.kind = static_cast<int>(state::editing::model::CameraInterpolationType::CubicBezier);
+                    action.bezierControls = edit->controls;
+                    submit(std::move(action));
+                }
+            }
             if (person) {
                 // The subject holds from this key until the next key on the same track.
                 property::separator();

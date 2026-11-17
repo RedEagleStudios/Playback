@@ -308,6 +308,11 @@ bool ReplayEditor::selectCameraByIndex(std::size_t index) {
     return true;
 }
 
+void ReplayEditor::requestKeyframeSelection(std::string trackId, int tick) {
+    std::scoped_lock lock(mSelectionRequestMutex);
+    mSelectionRequest = state::editing::model::SelectedKeyframe{std::move(trackId), tick};
+}
+
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
     if (!state.editorVisible && !exportActive) {
@@ -325,6 +330,14 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     syncTimelineViewPreferences(replayPath);
     mFrameState = &state;
     mSubmit     = &submit;
+    {
+        std::optional<state::editing::model::SelectedKeyframe> request;
+        {
+            std::scoped_lock lock(mSelectionRequestMutex);
+            request = std::exchange(mSelectionRequest, std::nullopt);
+        }
+        if (request) mSelection.select(std::move(*request));
+    }
     // A reloaded or edited project can drop the selected object; without this the inspector shows "missing".
     if (state.project) mSelection.pruneInvalid(*state.project);
 

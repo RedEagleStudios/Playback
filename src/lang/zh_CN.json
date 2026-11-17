@@ -245,6 +245,7 @@
                 "easingPresets": "缓动预设",
                 "easingPresetNone": "无",
                 "easingPresetCustom": "自定义曲线",
+                "easingCurve": "到下一关键帧的缓动",
                 "easing": {
                     "sine": "正弦",
                     "quad": "二次",
@@ -539,8 +540,8 @@
                 "worldOverrideGraphics": "覆盖图像模式",
                 "worldGraphicsSimple": "简单",
                 "worldGraphicsFancy": "精美",
-                "worldGraphicsVibrant": "Vibrant Visuals",
-                "worldGraphicsHint": "Vibrant Visuals 仅在支持的设备上显示。回放关闭后会恢复你自己的图像模式。",
+                "worldGraphicsVibrant": "灵动视效",
+                "worldGraphicsHint": "灵动视效仅在支持的设备上显示。回放关闭后会恢复你自己的图像模式。",
                 "worldOverrideGlobalPacks": "覆盖全局资源包",
                 "worldGlobalPacksHint": "回放打开期间，这些资源包会替换你自己的全局资源包；回放世界自带的资源包仍在其上方。它们随回放世界一起加载，更改后请重新打开回放。",
                 "worldGlobalPacksEmpty": "无全局资源包",

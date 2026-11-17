@@ -4,6 +4,7 @@
 #include "ControlServer.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/ui/ReplayEditor.h"
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorContext.h"
 #include "playback/state/EditorState.h"
@@ -118,6 +119,11 @@ json stateJson(EditorState const& state) {
                     {"position",      json::array({key.position.x, key.position.y, key.position.z})},
                     {"rotation",      json::array({key.yaw, key.pitch, key.roll})                  },
                     {"fov",           key.fov                                                      },
+                    {"bezier",
+                     json::array(
+                         {json::array({key.bezierCtrl1.x, key.bezierCtrl1.y}),
+                          json::array({key.bezierCtrl2.x, key.bezierCtrl2.y})}
+                     )                                                                             },
                     {"subject",       key.subject                                                  }
                 });
             }
@@ -305,6 +311,24 @@ void startControlServer(EditorContext& context, int port) {
         auto names = json::array();
         for (auto const name : magic_enum::enum_names<EditorActionType>()) names.push_back(name);
         response.set_content(names.dump(), "application/json");
+    });
+    // Selects a keyframe as clicking it would, so the inspector shows it: {"cameraId": "...", "tick": 120}.
+    server->http.Post("/select", [](httplib::Request const& request, httplib::Response& response) {
+        auto const body = json::parse(request.body, nullptr, false);
+        if (!body.is_object() || !body.contains("cameraId") || !body["cameraId"].is_string() || !body.contains("tick")
+            || !body["tick"].is_number_integer()) {
+            response.status = 400;
+            response.set_content(
+                R"({"error":"expected {\"cameraId\": string, \"tick\": integer}"})",
+                "application/json"
+            );
+            return;
+        }
+        ui::ReplayEditor::getInstance().requestKeyframeSelection(
+            body["cameraId"].get<std::string>(),
+            body["tick"].get<int>()
+        );
+        response.set_content(R"({"ok":true})", "application/json");
     });
     server->http.Post("/action", [&context](httplib::Request const& request, httplib::Response& response) {
         auto const                  body = json::parse(request.body, nullptr, false);

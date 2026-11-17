@@ -245,6 +245,7 @@
                 "easingPresets": "Easing presets",
                 "easingPresetNone": "None",
                 "easingPresetCustom": "Custom curve",
+                "easingCurve": "Easing to the next key",
                 "easing": {
                     "sine": "Sine",
                     "quad": "Quad",

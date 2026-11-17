@@ -72,17 +72,21 @@ std::optional<EasingPreset> drawEasingPresetMenus(std::optional<std::size_t> cur
     return picked;
 }
 
-std::optional<EasingPreset>
-drawEasingPresetCombo(char const* id, char const* preview, std::optional<std::size_t> current) {
-    std::optional<EasingPreset> picked;
+std::optional<EasingPick>
+drawEasingPresetCombo(char const* id, char const* preview, std::optional<std::size_t> current, bool noneCurrent) {
+    std::optional<EasingPick> picked;
     if (!widgets::beginCombo(id, preview)) return picked;
+    if (ImGui::Selectable("playback.refactorEditor.details.easingPresetNone"_tr().c_str(), noneCurrent)) {
+        picked = EasingPick{};
+    }
+    ImGui::Separator();
     for (std::size_t index = 0; index < EasingPresets.size(); ++index) {
         auto const& preset = EasingPresets[index];
         if (index % DirectionsPerFamily == 0) {
             if (index > 0) ImGui::Separator();
             ImGui::TextDisabled("%s", familyName(preset.family).c_str());
         }
-        if (ImGui::Selectable(easingPresetName(preset).c_str(), current == index)) picked = preset;
+        if (ImGui::Selectable(easingPresetName(preset).c_str(), current == index)) picked = EasingPick{preset};
     }
     widgets::endCombo();
     return picked;

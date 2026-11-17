@@ -11,6 +11,7 @@ namespace playback::editor::control {
 //   GET  /state    the editor state the UI draws (playhead, tracks, world, replay list, export) as JSON
 //   GET  /actions  every action type name
 //   POST /action   one EditorAction as JSON, e.g. {"type": "Seek", "tick": 1700}
+//   POST /select   selects a keyframe as clicking it would: {"cameraId": "...", "tick": 120}
 // Started with the replay UI when the config's control.enabled is set (the default), on control.port (7878).
 void startControlServer(state::EditorContext& context, int port);
 void stopControlServer();

@@ -19,6 +19,8 @@
 
 #include <functional>
 #include <map>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -54,6 +56,8 @@ public:
     bool               pasteAtPlayhead() override;
     bool               addMarkerAtPlayhead() override;
     bool               selectCameraByIndex(std::size_t index);
+    // Any thread: selects this keyframe at the start of the next frame, as clicking it would. Used by the control API.
+    void requestKeyframeSelection(std::string trackId, int tick);
 
     [[nodiscard]] bool  isInfoOverlayVisible() const override { return mViewportPanel.isInfoOverlayVisible(); }
     void                setInfoOverlayVisible(bool visible) override { mViewportPanel.setInfoOverlayVisible(visible); }
@@ -108,6 +112,8 @@ private:
     playback::state::EditorState const*   mFrameState{};
     SubmitAction const*                   mSubmit{};
     state::editing::model::SelectionModel mSelection;
+    std::mutex                                             mSelectionRequestMutex;
+    std::optional<state::editing::model::SelectedKeyframe> mSelectionRequest;
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
     bool  mFollowExitTapArmed{false};

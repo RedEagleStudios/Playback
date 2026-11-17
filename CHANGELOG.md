@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `POST /select` on the control API selects a keyframe as clicking it would, so the inspector shows it: `{"cameraId": "...", "tick": 120}`.
+- A Cubic Bezier keyframe's inspector shows its easing as a graph of progress over time to the next key. The two control points are dragged on the graph, a dot loops along the curve to show the motion, and each drag is one undo step. Time stays between the keys; progress may overshoot them. The Easing dropdown also offers None, which sets the keys back to Smooth.
+
 ## [0.4.0-mc26.60-re.2] - 2026-11-17
 
 RedEagleStudios fork release, built from `re-main`.
