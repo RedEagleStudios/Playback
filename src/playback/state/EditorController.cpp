@@ -48,6 +48,18 @@ constexpr auto kAutosaveInterval = std::chrono::seconds(30);
 
 auto& logger() { return Playback::getInstance().getSelf().getLogger(); }
 
+// The global resource packs a replay's saved project asks for, read before the replay world loads.
+std::optional<std::vector<state::editing::model::GlobalPack>> projectGlobalPacks(std::string_view replayPath) {
+    auto const file = state::editing::ProjectStore::defaultProjectPath(replayPath);
+    if (!state::editing::ProjectStore::exists(file)) return std::nullopt;
+    state::editing::model::EditorStateExt project;
+    std::string                           error;
+    if (!state::editing::ProjectStore::load(file, project, error) || !project.world.overrideGlobalPacks) {
+        return std::nullopt;
+    }
+    return std::move(project.world.globalPacks);
+}
+
 } // namespace
 
 EditorController::EditorController(EditorContext& context)
@@ -513,6 +525,8 @@ void EditorController::publishState(bool hudVisible) {
             world.overrideFog ? std::optional<editor::graphics::FogOverride>{{world.fogStart, world.fogEnd}}
                               : std::nullopt
         );
+        session.setGraphicsOverride(world.overrideGraphics ? std::optional{world.graphics} : std::nullopt);
+        state.installedGlobalPacks = session.installedGlobalPacks();
     }
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
     state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
@@ -631,10 +645,13 @@ void EditorController::tick(bool hudVisible) {
                 } else if (!replay->canOpen) {
                     mBrowserError =
                         replay->problem.empty() ? "playback.replayBrowser.error.invalidArchive"_tr() : replay->problem;
-                } else if (!session.start(replay->path)) {
+                } else if (
+                    auto const key = replayPreferenceKey(replay->path);
+                    !session.start(replay->path, projectGlobalPacks(key))
+                ) {
                     mBrowserError = "playback.replayBrowser.error.openFailed"_tr();
                 } else {
-                    mActiveReplayPath = replayPreferenceKey(replay->path);
+                    mActiveReplayPath = key;
                     mBrowserVisible   = false;
                     mBrowserError.clear();
                 }

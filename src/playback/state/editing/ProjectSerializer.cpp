@@ -410,6 +410,14 @@ std::string serializeProject(model::EditorStateExt const& project) {
     auto transitions = json::array();
     for (auto const& transition : project.transitions) transitions.push_back(toJson(transition));
 
+    auto globalPacks = json::array();
+    for (auto const& pack : project.world.globalPacks) {
+        globalPacks.push_back({
+            {"id",      pack.id     },
+            {"version", pack.version},
+            {"name",    pack.name   },
+        });
+    }
     json const document{
         {"formatVersion",             kProjectFormatVersion            },
         {"projectName",               project.projectName              },
@@ -438,7 +446,11 @@ std::string serializeProject(model::EditorStateExt const& project) {
              {"hideClouds", project.world.hideClouds},
              {"overrideFog", project.world.overrideFog},
              {"fogStart", project.world.fogStart},
-             {"fogEnd", project.world.fogEnd}
+             {"fogEnd", project.world.fogEnd},
+             {"overrideGraphics", project.world.overrideGraphics},
+             {"graphics", static_cast<int>(project.world.graphics)},
+             {"overrideGlobalPacks", project.world.overrideGlobalPacks},
+             {"globalPacks", std::move(globalPacks)}
          }                                                             },
         {"recordedCameraTracksAdded", project.recordedCameraTracksAdded}
     };
@@ -517,6 +529,16 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.world.overrideFog  = boolOr(*world, "overrideFog", defaults.overrideFog);
         loaded.world.fogStart     = finiteOr(*world, "fogStart", defaults.fogStart);
         loaded.world.fogEnd       = finiteOr(*world, "fogEnd", defaults.fogEnd);
+        loaded.world.overrideGraphics    = boolOr(*world, "overrideGraphics", defaults.overrideGraphics);
+        loaded.world.graphics            = enumOr(*world, "graphics", defaults.graphics, 2);
+        loaded.world.overrideGlobalPacks = boolOr(*world, "overrideGlobalPacks", defaults.overrideGlobalPacks);
+        if (auto const* packs = arrayAt(*world, "globalPacks")) {
+            for (auto const& pack : *packs) {
+                if (!pack.is_object()) continue;
+                model::GlobalPack entry{stringOr(pack, "id"), stringOr(pack, "version"), stringOr(pack, "name")};
+                if (!entry.id.empty()) loaded.world.globalPacks.push_back(std::move(entry));
+            }
+        }
         loaded.world              = loaded.world.sanitized();
     }
     loaded.recordedCameraTracksAdded = boolOr(document, "recordedCameraTracksAdded", false);

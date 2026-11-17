@@ -3,6 +3,7 @@
 #include "playback/keyframe/CameraRenderState.h"
 #include "playback/keyframe/FollowCamera.h"
 #include "playback/record/Recorder.h"
+#include "playback/replay/ClientVisualOverrides.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
 #include "mc/deps/core/math/Vec2.h"
@@ -269,6 +270,8 @@ private:
     bool                                        mFreezeTimeOverride{true};
     bool                                        mHideClouds{};
     std::optional<bool>                         mSavedRenderClouds;
+    // The project's graphics mode (setGraphicsOverride) and global resource packs (start).
+    ClientVisualOverrides                       mVisualOverrides;
     std::optional<DimensionType>                mPendingReplayDimension;
     std::optional<PendingSnapshotApply>         mPendingSnapshotApply;
     std::shared_ptr<DimensionTransitionRequest> mDimensionTransitionRequest;
@@ -596,7 +599,12 @@ private:
     void updateReplaySubjectPosture(bool snap);
 
 public:
-    bool start(std::filesystem::path filePath);
+    // globalPacks: the project's global resource packs for this replay, top priority first; nullopt keeps the
+    // viewer's own. They are in place before the replay world loads and hold until it closes.
+    bool start(
+        std::filesystem::path                                                filePath,
+        std::optional<std::vector<state::editing::model::GlobalPack>> const& globalPacks
+    );
     void stop();
 
     void requestStop() { mStopRequested.store(true, std::memory_order_release); }
@@ -637,6 +645,13 @@ public:
     // The project's world look: a time of day (nullopt plays the recorded time) that is frozen or runs from the first
     // tick, and hidden clouds. Preview and export both read it.
     void setWorldOverrides(std::optional<int> timeOfDay, bool freezeTime, bool hideClouds);
+    // The project's graphics mode; nullopt keeps the viewer's own. Follows the project while the replay plays.
+    void setGraphicsOverride(std::optional<state::editing::model::GraphicsStyle> graphics) {
+        mVisualOverrides.requestGraphics(graphics);
+    }
+    [[nodiscard]] std::shared_ptr<std::vector<state::editing::model::GlobalPack> const> installedGlobalPacks() const {
+        return mVisualOverrides.installedPacks();
+    }
 
     void teleportReplayPlayer(::Vec3 const& feetPosition, ::Vec2 const& rotation);
 

@@ -536,6 +536,18 @@
                 "worldFogStart": "雾起始",
                 "worldFogEnd": "雾结束",
                 "worldFogDistanceHint": "占渲染距离的百分比。世界自带的雾约为 92% 到 100%；结束值超过 100% 时雾会变淡，直至消失。",
+                "worldOverrideGraphics": "覆盖图像模式",
+                "worldGraphicsSimple": "简单",
+                "worldGraphicsFancy": "精美",
+                "worldGraphicsVibrant": "Vibrant Visuals",
+                "worldGraphicsHint": "Vibrant Visuals 仅在支持的设备上显示。回放关闭后会恢复你自己的图像模式。",
+                "worldOverrideGlobalPacks": "覆盖全局资源包",
+                "worldGlobalPacksHint": "回放打开期间，这些资源包会替换你自己的全局资源包；回放世界自带的资源包仍在其上方。它们随回放世界一起加载，更改后请重新打开回放。",
+                "worldGlobalPacksEmpty": "无全局资源包",
+                "worldGlobalPacksAdd": "添加资源包...",
+                "worldGlobalPacksNoneInstalled": "没有其他已安装的资源包",
+                "worldGlobalPackMissing": "未安装",
+                "worldGlobalPackRemove": "移除",
                 "worldHint": "保存在项目中。同时作用于预览和导出的视频。"
             },
             "defaults": {

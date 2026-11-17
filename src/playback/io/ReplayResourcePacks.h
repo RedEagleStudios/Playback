@@ -15,6 +15,8 @@
 struct zip;
 
 class IResourcePackRepository;
+class PackManifest;
+class ResourcePack;
 struct ResourcePacksInfoPacketPayload;
 
 namespace playback::io::packs {
@@ -105,5 +107,8 @@ private:
 
 // Keeps the extraction in the cache for the next load of the same replay, or deletes it.
 void removeMountedPacks(std::filesystem::path const& mountDir);
+
+// 26.51 no longer exports ResourcePack::getManifest; the manifest lives on the pack behind the impl.
+[[nodiscard]] PackManifest const& manifestOf(ResourcePack const& pack);
 
 } // namespace playback::io::packs

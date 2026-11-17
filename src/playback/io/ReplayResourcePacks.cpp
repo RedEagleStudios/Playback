@@ -318,12 +318,15 @@ ZipPackResult zipPackDirectory(
     return result;
 }
 
-// 26.51 no longer exports ResourcePack::getManifest; the manifest lives on the pack behind the impl.
+} // namespace
+
 PackManifest const& manifestOf(ResourcePack const& pack) {
     auto const& impl     = *pack.mImpl;
     auto const& resource = *impl.mPack;
     return *resource.mManifest;
 }
+
+namespace {
 
 // Reads the uuid_version key from a pack's manifest.json header.
 std::optional<std::string> manifestKey(std::filesystem::path const& packDir) {

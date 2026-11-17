@@ -48,6 +48,8 @@ struct EditorState {
     bool                                                         canUndo{};
     bool                                                         canRedo{};
     std::shared_ptr<state::editing::model::EditorStateExt const> project;
+    // Resource packs the project can turn on as global packs; null until the replay has read them.
+    std::shared_ptr<std::vector<state::editing::model::GlobalPack> const> installedGlobalPacks;
     keyframe::CameraTimelineHandle                               cameraTimeline;
     EditorCapabilities                                           capabilities;
     ProjectPersistenceState                                      persistence;

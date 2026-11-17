@@ -3,8 +3,26 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <string>
+#include <vector>
 
 namespace playback::state::editing::model {
+
+// The game's graphics modes a project can pick; the values are the game's GraphicsMode option values.
+enum class GraphicsStyle : int {
+    Simple         = 0,
+    Fancy          = 1,
+    VibrantVisuals = 2,
+};
+
+// A resource pack by identity. The name is only shown, and kept for packs that are not installed here.
+struct GlobalPack {
+    std::string id;
+    std::string version;
+    std::string name;
+
+    bool operator==(GlobalPack const&) const = default;
+};
 
 // Replay-world look that the project overrides, in preview and export alike.
 struct WorldSettings {
@@ -24,6 +42,13 @@ struct WorldSettings {
     // past the start: with no distance to fade over there is no fog at all.
     float fogStart{0.92f};
     float fogEnd{1.0f};
+    // Off: the viewer's own graphics mode.
+    bool          overrideGraphics{};
+    GraphicsStyle graphics{GraphicsStyle::Fancy};
+    // Off: the viewer's own global resource packs. On: exactly globalPacks, top priority first, in place from when
+    // the replay world loads until it closes; the replay world's own packs stay above them.
+    bool                    overrideGlobalPacks{};
+    std::vector<GlobalPack> globalPacks;
 
     static constexpr float MaxFogDistance = 4.0f;
     static constexpr float MinFogRange    = 0.01f;
@@ -38,6 +63,9 @@ struct WorldSettings {
         out.fogStart      = unit(fogStart, 0.0f, MaxFogDistance - MinFogRange, 0.92f);
         out.fogEnd =
             unit(fogEnd, out.fogStart + MinFogRange, MaxFogDistance, std::max(out.fogStart + MinFogRange, 1.0f));
+        if (graphics != GraphicsStyle::Simple && graphics != GraphicsStyle::Fancy
+            && graphics != GraphicsStyle::VibrantVisuals)
+            out.graphics = GraphicsStyle::Fancy;
         return out;
     }
 

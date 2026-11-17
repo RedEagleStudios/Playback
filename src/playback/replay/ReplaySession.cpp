@@ -805,7 +805,10 @@ bool divertRecordedHudPacket(Packet& packet, FollowedHudMirror& mirror) {
 ReplaySession::ReplaySession()  = default;
 ReplaySession::~ReplaySession() = default;
 
-bool ReplaySession::start(std::filesystem::path filePath) {
+bool ReplaySession::start(
+    std::filesystem::path                                                filePath,
+    std::optional<std::vector<state::editing::model::GlobalPack>> const& globalPacks
+) {
     if (mActive || mCleanupState != CleanupState::None || !mReplayLevelId.empty()) {
         getLogger().error("Unable to start replay while another replay world is active or being removed");
         return false;
@@ -844,6 +847,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         if (!prepareReplayResourcePacks(configurationPackets)) {
             throw std::runtime_error("Unable to prepare the recorded resource-pack configuration");
         }
+        mVisualOverrides.useGlobalPacks(globalPacks);
         prepareRecordedBlockRegistry(configurationPackets);
         prepareRecordedItemRegistry(configurationPackets);
         auto const& context = mSnapshotContexts.front();
@@ -916,6 +920,7 @@ void ReplaySession::clearReplayData() {
     restoreFollowedPlayerHud();
     restoreObserverSkin();
     restoreClouds();
+    mVisualOverrides.restore();
     mTimeOfDayOverride.reset();
     mFreezeTimeOverride = true;
     mHideClouds         = false;
@@ -2596,6 +2601,7 @@ void ReplaySession::tick() {
         forceFirstPersonCamera();
         if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
         applyCloudOverride();
+        mVisualOverrides.apply();
         resumeSeekAnimationClips();
         updateScreenPreview();
         syncFollowedPlayerHud();

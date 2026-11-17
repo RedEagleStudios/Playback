@@ -1197,6 +1197,118 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
 
     ImGui::EndDisabled();
 
+    property::separator();
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldOverrideGraphics"_tr() + "##set-override-graphics").c_str(),
+            &world.overrideGraphics
+        ))
+        commit(world);
+    ImGui::BeginDisabled(!world.overrideGraphics);
+    // Indexed by GraphicsStyle.
+    std::array const graphicsStyles{
+        "playback.refactorEditor.inspector.worldGraphicsSimple"_tr(),
+        "playback.refactorEditor.inspector.worldGraphicsFancy"_tr(),
+        "playback.refactorEditor.inspector.worldGraphicsVibrant"_tr(),
+    };
+    auto const currentStyle = static_cast<std::size_t>(world.graphics);
+    ImGui::SetNextItemWidth(-1.0f);
+    if (widgets::beginCombo("##set-graphics", graphicsStyles[currentStyle].c_str())) {
+        for (std::size_t index = 0; index < graphicsStyles.size(); ++index) {
+            if (ImGui::Selectable(graphicsStyles[index].c_str(), index == currentStyle)) {
+                world.graphics = static_cast<editing::model::GraphicsStyle>(index);
+                commit(world);
+            }
+        }
+        widgets::endCombo();
+    }
+    widgets::itemTooltip("playback.refactorEditor.inspector.worldGraphicsHint"_tr().c_str());
+    ImGui::EndDisabled();
+
+    property::separator();
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldOverrideGlobalPacks"_tr() + "##set-override-global-packs").c_str(),
+            &world.overrideGlobalPacks
+        ))
+        commit(world);
+    ImGui::BeginDisabled(!world.overrideGlobalPacks);
+    {
+        auto const& installed   = ctx.state.installedGlobalPacks;
+        auto const  isInstalled = [&](editing::model::GlobalPack const& pack) {
+            return installed && std::ranges::any_of(*installed, [&](auto const& entry) {
+                       return entry.id == pack.id && entry.version == pack.version;
+                   });
+        };
+        std::optional<WorldSettings> packEdit;
+        if (world.globalPacks.empty()) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.worldGlobalPacksEmpty"_tr().c_str());
+        }
+        // Top priority first, as the game lists global packs.
+        for (std::size_t index = 0; index < world.globalPacks.size(); ++index) {
+            auto const& pack = world.globalPacks[index];
+            ImGui::PushID(static_cast<int>(index));
+            ImGui::BeginDisabled(index == 0);
+            if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
+                packEdit = world;
+                std::swap(packEdit->globalPacks[index], packEdit->globalPacks[index - 1]);
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.0f, 2.0f);
+            ImGui::BeginDisabled(index + 1 == world.globalPacks.size());
+            if (ImGui::ArrowButton("##down", ImGuiDir_Down)) {
+                packEdit = world;
+                std::swap(packEdit->globalPacks[index], packEdit->globalPacks[index + 1]);
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.0f, 2.0f);
+            if (ImGui::Button(ICON_CLOSE "##remove")) {
+                packEdit = world;
+                packEdit->globalPacks.erase(packEdit->globalPacks.begin() + static_cast<std::ptrdiff_t>(index));
+            }
+            widgets::itemTooltip("playback.refactorEditor.inspector.worldGlobalPackRemove"_tr().c_str());
+            ImGui::SameLine();
+            if (isInstalled(pack)) {
+                ImGui::Text("%s  %s", pack.name.c_str(), pack.version.c_str());
+            } else {
+                ImGui::TextDisabled(
+                    "%s  %s (%s)",
+                    pack.name.c_str(),
+                    pack.version.c_str(),
+                    "playback.refactorEditor.inspector.worldGlobalPackMissing"_tr().c_str()
+                );
+            }
+            ImGui::PopID();
+        }
+        ImGui::SetNextItemWidth(-1.0f);
+        if (widgets::beginCombo(
+                "##add-global-pack",
+                "playback.refactorEditor.inspector.worldGlobalPacksAdd"_tr().c_str()
+            )) {
+            bool listed = false;
+            if (installed) {
+                for (auto const& pack : *installed) {
+                    if (std::ranges::find(world.globalPacks, pack) != world.globalPacks.end()) continue;
+                    listed = true;
+                    if (ImGui::Selectable((pack.name + "  " + pack.version + "##" + pack.id + pack.version).c_str())) {
+                        packEdit = world;
+                        packEdit->globalPacks.push_back(pack);
+                    }
+                }
+            }
+            if (!listed) {
+                ImGui::TextDisabled(
+                    "%s",
+                    "playback.refactorEditor.inspector.worldGlobalPacksNoneInstalled"_tr().c_str()
+                );
+            }
+            widgets::endCombo();
+        }
+        if (packEdit) commit(*packEdit);
+    }
+    ImGui::EndDisabled();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.worldGlobalPacksHint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+
     if (mWorldDraft && !ImGui::IsAnyItemActive()) commit(*mWorldDraft);
 
     ImGui::PushTextWrapPos(0.0f);

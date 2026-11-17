@@ -29,15 +29,29 @@ namespace model = playback::state::editing::model;
 
 auto& logger() { return Playback::getInstance().getSelf().getLogger(); }
 
-json toJson(model::WorldSettings const& world) {
+json toJson(model::GlobalPack const& pack) {
     return {
-        {"overrideTime", world.overrideTime},
-        {"timeOfDay",    world.timeOfDay   },
-        {"freezeTime",   world.freezeTime  },
-        {"hideClouds",   world.hideClouds  },
-        {"overrideFog",  world.overrideFog },
-        {"fogStart",     world.fogStart    },
-        {"fogEnd",       world.fogEnd      },
+        {"id",      pack.id     },
+        {"version", pack.version},
+        {"name",    pack.name   },
+    };
+}
+
+json toJson(model::WorldSettings const& world) {
+    auto packs = json::array();
+    for (auto const& pack : world.globalPacks) packs.push_back(toJson(pack));
+    return {
+        {"overrideTime",        world.overrideTime                   },
+        {"timeOfDay",           world.timeOfDay                      },
+        {"freezeTime",          world.freezeTime                     },
+        {"hideClouds",          world.hideClouds                     },
+        {"overrideFog",         world.overrideFog                    },
+        {"fogStart",            world.fogStart                       },
+        {"fogEnd",              world.fogEnd                         },
+        {"overrideGraphics",    world.overrideGraphics               },
+        {"graphics",            magic_enum::enum_name(world.graphics)},
+        {"overrideGlobalPacks", world.overrideGlobalPacks            },
+        {"globalPacks",         std::move(packs)                     },
     };
 }
 
@@ -86,6 +100,12 @@ json stateJson(EditorState const& state) {
         });
     }
     result["players"] = std::move(players);
+
+    auto installedPacks = json::array();
+    if (state.installedGlobalPacks) {
+        for (auto const& pack : *state.installedGlobalPacks) installedPacks.push_back(toJson(pack));
+    }
+    result["installedGlobalPacks"] = std::move(installedPacks);
 
     if (auto const& project = state.project) {
         auto cameras = json::array();
@@ -159,13 +179,31 @@ model::Vec3 vec3From(json const& node, model::Vec3 fallback) {
 
 // The project's world settings with the fields `node` names replaced.
 model::WorldSettings worldFrom(json const& node, model::WorldSettings world) {
-    world.overrideTime = node.value("overrideTime", world.overrideTime);
-    world.timeOfDay    = node.value("timeOfDay", world.timeOfDay);
-    world.freezeTime   = node.value("freezeTime", world.freezeTime);
-    world.hideClouds   = node.value("hideClouds", world.hideClouds);
-    world.overrideFog  = node.value("overrideFog", world.overrideFog);
-    world.fogStart     = node.value("fogStart", world.fogStart);
-    world.fogEnd       = node.value("fogEnd", world.fogEnd);
+    world.overrideTime     = node.value("overrideTime", world.overrideTime);
+    world.timeOfDay        = node.value("timeOfDay", world.timeOfDay);
+    world.freezeTime       = node.value("freezeTime", world.freezeTime);
+    world.hideClouds       = node.value("hideClouds", world.hideClouds);
+    world.overrideFog      = node.value("overrideFog", world.overrideFog);
+    world.fogStart         = node.value("fogStart", world.fogStart);
+    world.fogEnd           = node.value("fogEnd", world.fogEnd);
+    world.overrideGraphics = node.value("overrideGraphics", world.overrideGraphics);
+    if (auto const graphics = node.find("graphics"); graphics != node.end() && graphics->is_string()) {
+        if (auto const parsed = magic_enum::enum_cast<model::GraphicsStyle>(graphics->get<std::string>())) {
+            world.graphics = *parsed;
+        }
+    }
+    world.overrideGlobalPacks = node.value("overrideGlobalPacks", world.overrideGlobalPacks);
+    // The whole list, top priority first: [{"id", "version", "name"}].
+    if (auto const packs = node.find("globalPacks"); packs != node.end() && packs->is_array()) {
+        world.globalPacks.clear();
+        for (auto const& pack : *packs) {
+            world.globalPacks.push_back({
+                pack.value("id", std::string{}),
+                pack.value("version", std::string{}),
+                pack.value("name", std::string{}),
+            });
+        }
+    }
     return world.sanitized();
 }
 
