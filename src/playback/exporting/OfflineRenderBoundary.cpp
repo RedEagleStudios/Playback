@@ -24,6 +24,9 @@ constexpr auto     SubmittedCaptureWait  = std::chrono::milliseconds{1000};
 constexpr auto     WarmupSceneTimeout    = std::chrono::seconds{30};
 constexpr auto     ForcedLoadingDelay    = std::chrono::seconds{5};
 constexpr uint32_t StableWarmupFrames    = 3;
+// Real time a warm-up lasts at least. The export's resize restarts a shader pack (Arke) from black, and its exposure
+// and temporal buffers settle in real time, which a warm-up's frames alone pass through in under a second.
+constexpr auto MinimumWarmupTime = std::chrono::seconds{4};
 // Renderer time per warm-up render: one tick, 50 ms.
 constexpr float WarmupStepTicks = 1.0f;
 
@@ -819,13 +822,19 @@ OfflineRenderStepResult OfflineRenderBoundary::advanceWarmup(ExportFramePlan con
         return OfflineRenderStepResult::Failed;
     }
     if (warmupComplete()) mState = OfflineRenderBoundaryState::PreparingReplay;
-    if (mWarmupFramesRemaining != 0) return waiting(OfflineRenderWaitReason::WarmupBudget);
+    if (mWarmupFramesRemaining != 0 || now - mWarmupStartedAt < MinimumWarmupTime) {
+        return waiting(OfflineRenderWaitReason::WarmupBudget);
+    }
     if (mWarmupStableFrames < StableWarmupFrames) return waiting(OfflineRenderWaitReason::WarmupUi);
     return waiting(OfflineRenderWaitReason::ReplayPreparation);
 }
 
 bool OfflineRenderBoundary::warmupComplete() const {
-    return mWarmupFramesRemaining == 0 && mWarmupStableFrames >= StableWarmupFrames;
+    if (mWarmupFramesRemaining != 0 || mWarmupStableFrames < StableWarmupFrames) return false;
+    // No warm-up asked for, none is added.
+    return mWarmupFrames == 0
+        || (mWarmupStartedAt != std::chrono::steady_clock::time_point{}
+            && std::chrono::steady_clock::now() - mWarmupStartedAt >= MinimumWarmupTime);
 }
 
 bool OfflineRenderBoundary::hasStep(OfflineRenderClockKind kind) const { return mStep && mStep->kind == kind; }

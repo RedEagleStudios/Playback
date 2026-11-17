@@ -339,7 +339,7 @@
                 "sameAsProject": "Same as project",
                 "sameAsProjectHint": "The height follows the width at the viewport's frame shape (9:16, 16:9, ...). Off, any size goes; a size taller or wider than the game window keeps the centre of the view and is scaled up from it.",
                 "ssaaHint": "Renders at a multiple of the output size and downsamples. Sharper edges, slower export. Levels that would exceed the GPU limit are disabled.",
-                "warmupHint": "Frames rendered and discarded before the first captured frame, so chunks and lighting can settle.",
+                "warmupHint": "Frames rendered and discarded before the first captured frame, so chunks and lighting can settle. The warm-up also lasts at least 4 seconds, because a shader pack restarts from black when the export resizes the game view.",
                 "extraRendersHint": "Renders made and discarded before each frame is saved. 0 renders every frame once, which is right for most exports: ray tracing and Vibrant Visuals keep time with the replay, and the denoiser keeps accumulating across frames. Raise it when noise or trails remain after the lighting changes: extra renders stay on the same instant and only give the denoiser and light accumulation more passes, so those transitions finish sooner in the video. Each one costs a full render, so the export time multiplies.",
                 "motionBlur": "Motion blur",
                 "motionBlurHint": "Renders each frame several times across the open shutter and averages them, so movement smears like a film camera. Off keeps every frame sharp. Each sample is a full render, so 8 samples make the export about eight times slower. The preview is never blurred.",
