@@ -10,6 +10,7 @@
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/ClientCameraCapture.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -220,6 +221,8 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
         subject = "playback.refactorEditor.details.cameraKeyframe"_tr();
     } else if (selection.getAs<state::editing::model::SelectedMarker>()) {
         subject = "playback.refactorEditor.details.marker"_tr();
+    } else if (selection.getAs<state::editing::model::SelectedPoseKey>()) {
+        subject = "playback.refactorEditor.details.poseKey"_tr();
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
@@ -230,6 +233,7 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawKeyframes(ctx)) return;
     if (drawKeyframe(ctx)) return;
     if (drawMarker(ctx)) return;
+    if (drawPoseKey(ctx)) return;
     drawOverview(ctx);
 }
 
@@ -1129,7 +1133,6 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
     }
 
     drawWorldSection(ctx);
-    drawPoseSection(ctx);
     drawShaderSection(ctx);
 
     ImGui::EndDisabled();
@@ -1533,129 +1536,111 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     property::endSection();
 }
 
-void DetailsPanel::drawPoseSection(PanelContext const& ctx) {
-    using editing::model::PoseClip;
-    if (!ctx.state.project) return;
-    if (!property::beginSection("playback.refactorEditor.inspector.poses"_tr().c_str())) return;
+bool DetailsPanel::drawPoseKey(PanelContext const& ctx) {
+    using editing::model::PoseKey;
+    auto const* selected = ctx.selection.getAs<state::editing::model::SelectedPoseKey>();
+    if (!selected || !ctx.state.project) return false;
+    auto const& keys  = ctx.state.project->poseKeys;
+    auto const  found = std::ranges::find(keys, selected->poseKeyId, &PoseKey::id);
+    if (found == keys.end()) return false;
+    auto const& key = *found;
 
-    auto const& project = *ctx.state.project;
-    auto const  players = std::span<state::ReplayPlayerView const>{ctx.state.replayPlayers};
-    auto const  commit  = [&ctx](std::vector<PoseClip> clips) {
-        EditorAction action{EditorActionType::SetPoseClips};
-        action.poseClips = std::move(clips);
+    auto const commit = [&](auto&& change) {
+        auto edited = keys;
+        change(*std::ranges::find(edited, key.id, &PoseKey::id));
+        EditorAction action{EditorActionType::SetPoseKeys};
+        action.poseKeys = std::move(edited);
         ctx.submitAction(std::move(action));
     };
-    auto const playerName = [&](std::string const& uuid) {
-        auto const found = std::ranges::find(players, uuid, &state::ReplayPlayerView::uuid);
-        return found == players.end() ? uuid : found->name;
-    };
-    int const playhead = ctx.state.currentTick;
 
-    for (size_t index = 0; index < project.poses.size(); ++index) {
-        auto const& clip = project.poses[index];
-        ImGui::PushID(clip.id.c_str());
-        if (index > 0) property::separator();
-        auto edited = project.poses;
-        auto& pose  = edited[index];
+    if (!property::beginSection("playback.refactorEditor.details.poseKey"_tr().c_str())) return true;
 
-        ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.posePlayer"_tr().c_str());
-        ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::BeginCombo("##pose-player", playerName(clip.subject).c_str())) {
-            for (auto const& player : players) {
-                if (player.uuid.empty()) continue;
-                if (ImGui::Selectable(player.name.c_str(), player.uuid == clip.subject) && player.uuid != clip.subject) {
-                    pose.subject = player.uuid;
-                    commit(edited);
-                }
+    // The entity: any player or mob in the replay, as the viewport's right-click menu lists them.
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.poseEntity"_tr().c_str());
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::BeginCombo("##pose-entity", key.subjectLabel.empty() ? key.subject.c_str() : key.subjectLabel.c_str())) {
+        for (auto const& entity : replay::ReplaySession::getInstance().replayEntities()) {
+            if (entity.recorder || entity.choice.empty()) continue;
+            if (ImGui::Selectable(entity.label.c_str(), entity.choice == key.subject) && entity.choice != key.subject) {
+                commit([&](PoseKey& edited) {
+                    edited.subject      = entity.choice;
+                    edited.subjectLabel = entity.label;
+                });
             }
-            ImGui::EndCombo();
         }
-
-        ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.poseAnimation"_tr().c_str());
-        std::array<char, 256> animation{};
-        std::snprintf(animation.data(), animation.size(), "%s", clip.animation.c_str());
-        ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::InputText(
-                "##pose-animation",
-                animation.data(),
-                animation.size(),
-                ImGuiInputTextFlags_EnterReturnsTrue
-            )) {
-            pose.animation = animation.data();
-            commit(edited);
-        }
-        widgets::itemTooltip("playback.refactorEditor.inspector.poseAnimationHint"_tr().c_str());
-
-        int start = clip.startTick;
-        int end   = clip.endTick;
-        if (ImGui::InputInt(
-                "playback.refactorEditor.details.start"_tr().c_str(),
-                &start,
-                1,
-                20,
-                ImGuiInputTextFlags_EnterReturnsTrue
-            )) {
-            pose.startTick = std::clamp(start, 0, std::max(0, clip.endTick - 1));
-            commit(edited);
-        }
-        if (ImGui::InputInt(
-                "playback.refactorEditor.details.end"_tr().c_str(),
-                &end,
-                1,
-                20,
-                ImGuiInputTextFlags_EnterReturnsTrue
-            )) {
-            pose.endTick = std::max(end, clip.startTick + 1);
-            commit(edited);
-        }
-        if (ImGui::Button("playback.refactorEditor.inspector.poseStartHere"_tr().c_str()) && playhead < clip.endTick) {
-            pose.startTick = playhead;
-            commit(edited);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("playback.refactorEditor.inspector.poseEndHere"_tr().c_str()) && playhead > clip.startTick) {
-            pose.endTick = playhead;
-            commit(edited);
-        }
-
-        bool hideItems = clip.hideItems;
-        if (ImGui::Checkbox("playback.refactorEditor.inspector.poseHideItems"_tr().c_str(), &hideItems)) {
-            pose.hideItems = hideItems;
-            commit(edited);
-        }
-        if (property::actionButton("playback.refactorEditor.inspector.poseDelete"_tr().c_str())) {
-            edited.erase(edited.begin() + static_cast<std::ptrdiff_t>(index));
-            commit(edited);
-        }
-        ImGui::PopID();
+        ImGui::EndCombo();
     }
+
+    // The pose: the bundled one, back to the recorded animation, or any animation a loaded pack defines.
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.posePose"_tr().c_str());
+    struct Preset {
+        std::string_view animation;
+        std::string      label;
+    };
+    std::array const presets{
+        Preset{PoseKey::DefaultAnimation, "playback.refactorEditor.details.poseLeanCrossedArms"_tr()},
+        Preset{{},                        "playback.refactorEditor.details.poseInGame"_tr()         },
+    };
+    auto const preset = std::ranges::find(presets, std::string_view{key.animation}, &Preset::animation);
+    std::string const current =
+        preset != presets.end() ? preset->label : "playback.refactorEditor.details.poseCustom"_tr();
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::BeginCombo("##pose-preset", current.c_str())) {
+        for (auto const& entry : presets) {
+            if (ImGui::Selectable(entry.label.c_str(), entry.animation == key.animation)
+                && entry.animation != key.animation) {
+                commit([&](PoseKey& edited) { edited.animation = entry.animation; });
+            }
+        }
+        ImGui::EndCombo();
+    }
+    std::array<char, 256> animation{};
+    std::snprintf(animation.data(), animation.size(), "%s", key.animation.c_str());
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::InputTextWithHint(
+            "##pose-animation",
+            "playback.refactorEditor.details.poseAnimationHint"_tr().c_str(),
+            animation.data(),
+            animation.size(),
+            ImGuiInputTextFlags_EnterReturnsTrue
+        )) {
+        commit([&](PoseKey& edited) { edited.animation = animation.data(); });
+    }
+    widgets::itemTooltip("playback.refactorEditor.details.poseAnimationTooltip"_tr().c_str());
+
+    ImGui::BeginDisabled(key.animation.empty());
+    bool hideItems = key.hideItems;
+    if (ImGui::Checkbox("playback.refactorEditor.details.poseEmptyHands"_tr().c_str(), &hideItems)) {
+        commit([&](PoseKey& edited) { edited.hideItems = hideItems; });
+    }
+    ImGui::EndDisabled();
 
     property::separator();
-    if (property::actionButton("playback.refactorEditor.inspector.poseAdd"_tr().c_str())) {
-        // The followed player, else the first one recorded.
-        std::string subject = ctx.state.replaySubjectChoice;
-        if (std::ranges::find(players, subject, &state::ReplayPlayerView::uuid) == players.end() || subject.empty()) {
-            auto const first = std::ranges::find_if(players, [](auto const& player) { return !player.uuid.empty(); });
-            subject          = first == players.end() ? std::string{} : first->uuid;
-        }
-        std::string id;
-        for (size_t number = project.poses.size() + 1;; ++number) {
-            id = "pose-" + std::to_string(number);
-            if (std::ranges::find(project.poses, id, &PoseClip::id) == project.poses.end()) break;
-        }
-        auto clips = project.poses;
-        clips.push_back(PoseClip{
-            .id        = std::move(id),
-            .subject   = std::move(subject),
-            .startTick = playhead,
-            .endTick   = std::min(playhead + 100, std::max(playhead + 1, project.totalTicks)),
-        });
-        commit(std::move(clips));
+    int tick = key.tick;
+    if (ImGui::InputInt(
+            "playback.refactorEditor.details.poseTick"_tr().c_str(),
+            &tick,
+            1,
+            20,
+            ImGuiInputTextFlags_EnterReturnsTrue
+        )) {
+        commit([&](PoseKey& edited) { edited.tick = std::clamp(tick, 0, ctx.state.totalTicks); });
+    }
+    if (property::actionButton("playback.refactorEditor.details.poseMoveToPlayhead"_tr().c_str())) {
+        commit([&](PoseKey& edited) { edited.tick = ctx.state.currentTick; });
+    }
+    if (property::actionButton("playback.refactorEditor.details.poseDelete"_tr().c_str())) {
+        auto edited = keys;
+        std::erase_if(edited, [&](PoseKey const& entry) { return entry.id == key.id; });
+        EditorAction action{EditorActionType::SetPoseKeys};
+        action.poseKeys = std::move(edited);
+        ctx.submitAction(std::move(action));
     }
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.posesHint"_tr().c_str());
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.poseHint"_tr().c_str());
     ImGui::PopTextWrapPos();
     property::endSection();
+    return true;
 }
 
 void DetailsPanel::drawFollowSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera) {

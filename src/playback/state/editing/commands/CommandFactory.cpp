@@ -141,8 +141,8 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetWorldSettings(mode
     return std::make_unique<SetWorldSettings>(settings);
 }
 
-std::unique_ptr<model::IEditCommand> CommandFactory::createSetPoseClips(std::vector<model::PoseClip> clips) {
-    return std::make_unique<SetPoseClips>(std::move(clips));
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetPoseKeys(std::vector<model::PoseKey> keys) {
+    return std::make_unique<SetPoseKeys>(std::move(keys));
 }
 
 } // namespace playback::state::editing::command

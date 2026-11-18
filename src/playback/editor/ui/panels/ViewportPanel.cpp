@@ -124,6 +124,12 @@ void ViewportPanel::drawEntityPickMenu(PanelContext const& ctx) {
         std::string const label =
             "playback.refactorEditor.viewport.followEntity"_tr(entityMenuLabel(entity)) + "##pick-follow";
         if (ImGui::MenuItem(label.c_str(), nullptr, selected)) submitFollow(ctx, entity.choice);
+        // The recorder's row carries no choice to name it by, so it is not offered.
+        if (!entity.recorder && !entity.choice.empty()) {
+            std::string const pose =
+                "playback.refactorEditor.viewport.addPoseKey"_tr(entityMenuLabel(entity)) + "##pick-pose";
+            if (ImGui::MenuItem(pose.c_str())) ctx.commands.addPoseKeyAtPlayhead(entity.choice, entity.label);
+        }
     } else {
         ImGui::TextDisabled("%s", "playback.refactorEditor.viewport.noEntityHere"_tr().c_str());
     }

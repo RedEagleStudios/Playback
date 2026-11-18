@@ -169,21 +169,21 @@ json stateJson(EditorState const& state) {
                 {"tick",  marker.tick }
             });
         }
-        auto poses = json::array();
-        for (auto const& pose : project->poses) {
-            poses.push_back({
-                {"id",        pose.id       },
-                {"subject",   pose.subject  },
-                {"animation", pose.animation},
-                {"startTick", pose.startTick},
-                {"endTick",   pose.endTick  },
-                {"hideItems", pose.hideItems},
+        auto poseKeys = json::array();
+        for (auto const& key : project->poseKeys) {
+            poseKeys.push_back({
+                {"id",           key.id          },
+                {"subject",      key.subject     },
+                {"subjectLabel", key.subjectLabel},
+                {"tick",         key.tick        },
+                {"animation",    key.animation   },
+                {"hideItems",    key.hideItems   },
             });
         }
         result["project"] = {
             {"cameras", std::move(cameras)    },
             {"markers", std::move(markers)    },
-            {"poses",   std::move(poses)      },
+            {"poseKeys", std::move(poseKeys)   },
             {"world",   toJson(project->world)},
         };
     }
@@ -376,17 +376,17 @@ std::optional<EditorAction> actionFrom(json const& body, EditorState const& stat
     if (auto const world = body.find("worldSettings"); world != body.end()) {
         action.worldSettings = worldFrom(*world, state.project ? state.project->world : model::WorldSettings{});
     }
-    if (auto const poses = body.find("poseClips"); poses != body.end() && poses->is_array()) {
-        auto& clips = action.poseClips.emplace();
-        for (auto const& entry : *poses) {
-            model::PoseClip clip;
-            clip.id        = entry.value("id", std::string{});
-            clip.subject   = entry.value("subject", std::string{});
-            clip.animation = entry.value("animation", std::string{model::PoseClip::DefaultAnimation});
-            clip.startTick = entry.value("startTick", 0);
-            clip.endTick   = entry.value("endTick", 0);
-            clip.hideItems = entry.value("hideItems", true);
-            clips.push_back(std::move(clip));
+    if (auto const keys = body.find("poseKeys"); keys != body.end() && keys->is_array()) {
+        auto& poseKeys = action.poseKeys.emplace();
+        for (auto const& entry : *keys) {
+            model::PoseKey key;
+            key.id           = entry.value("id", std::string{});
+            key.subject      = entry.value("subject", std::string{});
+            key.subjectLabel = entry.value("subjectLabel", std::string{});
+            key.tick         = entry.value("tick", 0);
+            key.animation    = entry.value("animation", std::string{model::PoseKey::DefaultAnimation});
+            key.hideItems    = entry.value("hideItems", true);
+            poseKeys.push_back(std::move(key));
         }
     }
     if (auto const follow = body.find("followSettings"); follow != body.end()) {

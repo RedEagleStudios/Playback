@@ -30,7 +30,7 @@ struct EditorStateExt {
 
     std::vector<Marker> markers;
 
-    std::vector<PoseClip> poses;
+    std::vector<PoseKey> poseKeys;
 
     WorldSettings world;
     // The replay's recorded camera views were added as camera tracks once; deleting them must not bring them back.

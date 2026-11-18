@@ -43,6 +43,9 @@ struct SelectedSubActor {
 struct SelectedCamera {
     std::string cameraId;
 };
+struct SelectedPoseKey {
+    std::string poseKeyId;
+};
 
 using Selection = std::variant<
     SelectedKeyframe,
@@ -53,7 +56,8 @@ using Selection = std::variant<
     SelectedWorldActor,
     SelectedWorldActorSegment,
     SelectedSubActor,
-    SelectedCamera>;
+    SelectedCamera,
+    SelectedPoseKey>;
 
 struct EditorStateExt;
 

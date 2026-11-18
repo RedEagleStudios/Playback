@@ -1,24 +1,26 @@
 #include "PoseCommands.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace playback::state::editing::command {
 
-SetPoseClips::SetPoseClips(std::vector<model::PoseClip> clips) : mClips(std::move(clips)) {
-    for (auto& clip : mClips) clip = clip.sanitized();
+SetPoseKeys::SetPoseKeys(std::vector<model::PoseKey> keys) : mKeys(std::move(keys)) {
+    for (auto& key : mKeys) key.tick = std::max(0, key.tick);
+    std::ranges::stable_sort(mKeys, {}, &model::PoseKey::tick);
 }
 
-void SetPoseClips::execute(model::EditorStateExt& state) {
+void SetPoseKeys::execute(model::EditorStateExt& state) {
     mBefore.reset();
-    if (state.poses == mClips) return;
-    mBefore     = state.poses;
-    state.poses = mClips;
+    if (state.poseKeys == mKeys) return;
+    mBefore        = state.poseKeys;
+    state.poseKeys = mKeys;
 }
 
-void SetPoseClips::undo(model::EditorStateExt& state) {
-    if (mBefore) state.poses = *mBefore;
+void SetPoseKeys::undo(model::EditorStateExt& state) {
+    if (mBefore) state.poseKeys = *mBefore;
 }
 
-std::string SetPoseClips::label() const { return "Change Poses"; }
+std::string SetPoseKeys::label() const { return "Change Pose Keyframes"; }
 
 } // namespace playback::state::editing::command

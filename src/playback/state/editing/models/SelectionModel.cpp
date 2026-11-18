@@ -80,6 +80,8 @@ std::vector<std::string> SelectionModel::selectedIds() const {
                 return {sel.subActorId};
             } else if constexpr (std::is_same_v<T, SelectedCamera>) {
                 return {sel.cameraId};
+            } else if constexpr (std::is_same_v<T, SelectedPoseKey>) {
+                return {sel.poseKeyId};
             }
             return {};
         },
@@ -116,6 +118,8 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
             using T = std::decay_t<decltype(sel)>;
             if constexpr (std::is_same_v<T, SelectedCamera>) {
                 return camera(sel.cameraId);
+            } else if constexpr (std::is_same_v<T, SelectedPoseKey>) {
+                return std::ranges::any_of(state.poseKeys, [&](auto const& key) { return key.id == sel.poseKeyId; });
             } else if constexpr (std::is_same_v<T, SelectedKeyframe>) {
                 auto const it = std::ranges::find(state.cameras, sel.trackId, &CameraEntity::id);
                 return it != state.cameras.end() && it->keysByTick.contains(sel.tick);

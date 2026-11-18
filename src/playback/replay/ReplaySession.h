@@ -10,6 +10,7 @@
 #include "mc/deps/core/math/Vec2.h"
 #include "mc/deps/core/math/Vec3.h"
 #include "mc/legacy/ActorUniqueID.h"
+#include "mc/world/level/BlockPos.h"
 #include "mc/world/level/ChunkPos.h"
 
 
@@ -326,6 +327,16 @@ private:
     std::unordered_map<ChunkPos, SnapshotColumnIdentity>        mAppliedSnapshotColumns;
     std::unordered_map<ChunkPos, SnapshotColumnIdentity>        mPendingSnapshotColumns;
     std::unordered_set<ChunkPos>                                mDirtySnapshotColumns;
+    // Every block the timeline changed and what stood there before, in order. A seek back to a snapshot puts the
+    // old blocks back: re-sent snapshot columns do not replace blocks the client already changed.
+    struct BlockJournalEntry {
+        int      tick{};
+        int      dimension{};
+        BlockPos pos;
+        uint     layer{};
+        uint     runtimeId{};
+    };
+    std::vector<BlockJournalEntry> mBlockJournal;
     std::unordered_set<ChunkPos>                                mReusableSnapshotColumns;
     std::unordered_set<ChunkPos>                                mDirectSnapshotColumns;
     std::unordered_set<int>                                     mDirectLevelChunkIndices;
@@ -523,6 +534,10 @@ private:
     [[nodiscard]] bool applyPendingSnapshotLocalPlayer();
 
     void invalidateSnapshotColumns(Packet const& packet);
+    // Notes the blocks a timeline packet is about to change (journal above).
+    void journalBlockChanges(Packet const& packet);
+    // Puts back every block changed at or after fromTick, newest first.
+    void rewindBlockJournal(int fromTick);
 
     [[nodiscard]] bool seekChunkDeferralOpen() const;
 

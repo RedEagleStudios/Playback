@@ -972,6 +972,7 @@ void ReplaySession::clearReplayData() {
     mWeatherOverride.reset();
     mRecordedWeather.reset();
     endPoseClips(true);
+    mBlockJournal.clear();
     {
         std::lock_guard lock(mReplayItemRegistryMutex);
         mReplayItemRegistryPayload.clear();
@@ -2731,28 +2732,29 @@ void ReplaySession::applyPoseClips() {
     if (!mPoseRuntime) mPoseRuntime = std::make_unique<PoseClipRuntime>();
     auto& level = mReplayPlayer->getLevel();
 
-    std::unordered_map<std::string, ActorUniqueID> ids;
-    {
-        std::lock_guard lock(mReplayPlayersMutex);
-        for (auto const& [uuid, record] : mReplayPlayers) ids.emplace(uuid, record.id);
+    // Players by UUID, other entities by their "entity:" id, as the follow list names them.
+    std::unordered_map<std::string, std::optional<ActorUniqueID>> ids;
+    for (auto const& clip : mPoseClips) {
+        if (!ids.contains(clip.subject)) ids.emplace(clip.subject, resolveReplaySubjectId(clip.subject));
     }
-    // The pose plays as `/playanimation` would, on the runtime controller; sending it again with a stop expression
-    // that is already true blends it out.
+    // The pose plays as `/playanimation` would, on a controller of its own so recorded `/playanimation` clips on the
+    // runtime controller keep playing beside it; sending it again with a stop expression already true blends it out.
     auto const send = [&](Actor& actor, std::string const& animation, bool stop) {
         auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::TriggerAnimation);
         if (!packet || !packet->mHandler) return;
         auto& animate           = static_cast<AnimateEntityPacket&>(*packet);
         animate.mRuntimeIds     = std::vector{actor.getRuntimeID()};
         animate.mAnimation      = animation;
+        animate.mController     = "controller.animation.playback.pose";
         animate.mStopExpression = stop ? "1" : "0";
         animate.mBlendOutTime   = 0.2f;
         mInjectingPacket.store(packet.get(), std::memory_order_release);
         InjectionReset reset{mInjectingPacket};
         packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
     };
-    auto const giveBack = [](Player& player, PoseClipRuntime::Playing const& playing) {
-        if (playing.mainhand && player.getCarriedItem().isNull()) player.setCarriedItem(*playing.mainhand);
-        if (playing.offhand && player.getOffhandSlot().isNull()) player.setOffhandSlot(*playing.offhand);
+    auto const giveBack = [](Actor& actor, PoseClipRuntime::Playing const& playing) {
+        if (playing.mainhand && actor.getCarriedItem().isNull()) actor.setCarriedItem(*playing.mainhand);
+        if (playing.offhand && actor.getOffhandSlot().isNull()) actor.setOffhandSlot(*playing.offhand);
     };
 
     auto&                           playing = mPoseRuntime->playing;
@@ -2760,16 +2762,15 @@ void ReplaySession::applyPoseClips() {
     for (auto const& clip : mPoseClips) {
         if (!clip.activeAt(mCurrentTick)) continue;
         auto const id = ids.find(clip.subject);
-        if (id == ids.end()) continue;
-        auto* actor = level.fetchEntity(id->second, false);
-        if (!actor || !actor->isPlayer()) continue;
-        auto& player = static_cast<Player&>(*actor);
+        if (id == ids.end() || !id->second) continue;
+        auto* actor = level.fetchEntity(*id->second, false);
+        if (!actor || actor == mReplayPlayer) continue;
         active.insert(clip.id);
 
         auto& state = playing[clip.id];
-        if (state.actor != id->second || state.animation != clip.animation) {
+        if (state.actor != *id->second || state.animation != clip.animation) {
             state           = PoseClipRuntime::Playing{};
-            state.actor     = id->second;
+            state.actor     = *id->second;
             state.animation = clip.animation;
         }
         // An actor only takes a clip after its first render, and a seek rebuilds it.
@@ -2777,19 +2778,19 @@ void ReplaySession::applyPoseClips() {
             send(*actor, clip.animation, false);
         }
         if (!clip.hideItems) {
-            giveBack(player, state);
+            giveBack(*actor, state);
             state.mainhand.reset();
             state.offhand.reset();
             continue;
         }
         // Recorded equipment packets keep arriving; whatever they put in the hands is kept for the end of the clip.
-        if (!player.getCarriedItem().isNull()) {
-            state.mainhand = player.getCarriedItem();
-            player.setCarriedItem(ItemStack{});
+        if (!actor->getCarriedItem().isNull()) {
+            state.mainhand = actor->getCarriedItem();
+            actor->setCarriedItem(ItemStack{});
         }
-        if (!player.getOffhandSlot().isNull()) {
-            state.offhand = player.getOffhandSlot();
-            player.setOffhandSlot(ItemStack{});
+        if (!actor->getOffhandSlot().isNull()) {
+            state.offhand = actor->getOffhandSlot();
+            actor->setOffhandSlot(ItemStack{});
         }
     }
 
@@ -2799,9 +2800,9 @@ void ReplaySession::applyPoseClips() {
             continue;
         }
         auto* actor = level.fetchEntity(it->second.actor, false);
-        if (actor && actor->isPlayer()) {
+        if (actor) {
             send(*actor, it->second.animation, true);
-            giveBack(static_cast<Player&>(*actor), it->second);
+            giveBack(*actor, it->second);
         }
         it = playing.erase(it);
     }
@@ -2920,6 +2921,7 @@ void ReplaySession::beginSeek(int targetTick) {
     mReaderIndex        = selectedReader;
     mCurrentTick        = selectedStart;
     integration::pushReplayClock(mCurrentTick, true);
+    rewindBlockJournal(selectedStart);
     applySnapshot(*mReaders[mReaderIndex], followRecordedPlayer);
     getLogger()
         .debug("Seeking replay to tick {} from snapshot {} at tick {}", targetTick, selectedReader, selectedStart);
@@ -6387,7 +6389,10 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
 
     // Must also run while chunks are streaming: a seek keeps applying block updates between batches.
-    if (!mIsProcessingSnapshot) invalidateSnapshotColumns(*packet);
+    if (!mIsProcessingSnapshot) {
+        invalidateSnapshotColumns(*packet);
+        journalBlockChanges(*packet);
+    }
 
     // Texture updates do not create the map. A recording that started after the map was created never carries the
     // creation packet, so the level has to own the map before the native handler will keep its pixels.
@@ -6574,6 +6579,66 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         break;
     }
     return true;
+}
+
+void ReplaySession::journalBlockChanges(Packet const& packet) {
+    auto const* dimension = mReplayDimension.load(std::memory_order_acquire);
+    if (!dimension || !mReplayPlayer) return;
+    auto&       chunkSource = *dimension->mChunkSource;
+    auto const& region      = mReplayPlayer->getDimensionBlockSourceConst();
+    int const   dimensionId = dimension->getDimensionId().mValue;
+    auto const  note        = [&](BlockPos const& pos, uint layer) {
+        auto chunk = chunkSource.getExistingChunk(ChunkPos{pos});
+        if (!chunk || chunk->mIsEmptyClientChunk
+            || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+            return;
+        }
+        mBlockJournal.push_back({mCurrentTick, dimensionId, pos, layer, region.getBlock(pos, layer).mNetworkId});
+    };
+
+    switch (packet.getId()) {
+    case MinecraftPacketIds::UpdateBlock: {
+        auto const& update = static_cast<UpdateBlockPacket const&>(packet);
+        note(*update.mPos, update.mLayer);
+        break;
+    }
+    case MinecraftPacketIds::UpdateBlockSynced: {
+        auto const& update = static_cast<UpdateBlockSyncedPacket const&>(packet);
+        note(*update.mPos, update.mLayer);
+        break;
+    }
+    case MinecraftPacketIds::UpdateSubChunkBlocks: {
+        auto const& changed = *static_cast<UpdateSubChunkBlocksPacket const&>(packet).mBlocksChanged;
+        for (auto const& info : *changed.mStandards) note(*info.mPos, 0);
+        for (auto const& info : *changed.mExtras) note(*info.mPos, 1);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+void ReplaySession::rewindBlockJournal(int fromTick) {
+    if (!mNetworkHandler || !mReplayPlayer) {
+        mBlockJournal.clear();
+        return;
+    }
+    int const dimensionId = mReplayPlayer->getDimensionId().mValue;
+    while (!mBlockJournal.empty() && mBlockJournal.back().tick >= fromTick) {
+        auto const entry = mBlockJournal.back();
+        mBlockJournal.pop_back();
+        if (entry.dimension != dimensionId) continue;
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::UpdateBlock);
+        if (!packet || !packet->mHandler) continue;
+        auto& update        = static_cast<UpdateBlockPacket&>(*packet);
+        update.mPos         = entry.pos;
+        update.mLayer       = entry.layer;
+        update.mUpdateFlags = static_cast<uchar>(3);
+        update.mRuntimeId   = entry.runtimeId;
+        mInjectingPacket.store(packet.get(), std::memory_order_release);
+        InjectionReset reset{mInjectingPacket};
+        packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+    }
 }
 
 void ReplaySession::invalidateSnapshotColumns(Packet const& packet) {

@@ -441,8 +441,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::PreviewWorldSettings:
         mWorldPreview = action.worldSettings ? std::optional{action.worldSettings->sanitized()} : std::nullopt;
         break;
-    case EditorActionType::SetPoseClips:
-        if (action.poseClips) mCommandStack.push(CommandFactory::createSetPoseClips(*action.poseClips), mProject);
+    case EditorActionType::SetPoseKeys:
+        if (action.poseKeys) mCommandStack.push(CommandFactory::createSetPoseKeys(*action.poseKeys), mProject);
         break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
@@ -560,7 +560,7 @@ void EditorController::publishState(bool hudVisible) {
                 : std::nullopt
         );
         session.setGraphicsOverride(world.overrideGraphics ? std::optional{world.graphics} : std::nullopt);
-        session.setPoseClips(mProject.poses);
+        session.setPoseClips(state::editing::model::poseClipsFrom(mProject.poseKeys, mProject.totalTicks));
         state.installedGlobalPacks = session.installedGlobalPacks();
     }
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);

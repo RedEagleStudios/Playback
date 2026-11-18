@@ -408,15 +408,15 @@ std::string serializeProject(model::EditorStateExt const& project) {
     auto markers = json::array();
     for (auto const& marker : project.markers) markers.push_back(toJson(marker));
 
-    auto poses = json::array();
-    for (auto const& pose : project.poses) {
-        poses.push_back({
-            {"id",        pose.id       },
-            {"subject",   pose.subject  },
-            {"animation", pose.animation},
-            {"startTick", pose.startTick},
-            {"endTick",   pose.endTick  },
-            {"hideItems", pose.hideItems},
+    auto poseKeys = json::array();
+    for (auto const& key : project.poseKeys) {
+        poseKeys.push_back({
+            {"id",           key.id          },
+            {"subject",      key.subject     },
+            {"subjectLabel", key.subjectLabel},
+            {"tick",         key.tick        },
+            {"animation",    key.animation   },
+            {"hideItems",    key.hideItems   },
         });
     }
 
@@ -452,7 +452,7 @@ std::string serializeProject(model::EditorStateExt const& project) {
              {"subActors", std::move(subActors)}
          }                                                             },
         {"markers",                   std::move(markers)               },
-        {"poses",                     std::move(poses)                 },
+        {"poseKeys",                  std::move(poseKeys)              },
         {"videoTracks",               std::move(videoTracks)           },
         {"transitions",               std::move(transitions)           },
         {"world",
@@ -538,17 +538,17 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
             loaded.markers.push_back({stringOr(entry, "id"), stringOr(entry, "label"), intOr(entry, "tick", 0)});
         }
     }
-    if (auto const* poses = arrayAt(document, "poses")) {
-        for (auto const& entry : *poses) {
+    if (auto const* poseKeys = arrayAt(document, "poseKeys")) {
+        for (auto const& entry : *poseKeys) {
             if (!entry.is_object()) continue;
-            model::PoseClip pose;
-            pose.id        = stringOr(entry, "id");
-            pose.subject   = stringOr(entry, "subject");
-            pose.animation = stringOr(entry, "animation");
-            pose.startTick = intOr(entry, "startTick", 0);
-            pose.endTick   = intOr(entry, "endTick", 0);
-            pose.hideItems = boolOr(entry, "hideItems", true);
-            loaded.poses.push_back(pose.sanitized());
+            model::PoseKey key;
+            key.id           = stringOr(entry, "id");
+            key.subject      = stringOr(entry, "subject");
+            key.subjectLabel = stringOr(entry, "subjectLabel");
+            key.tick         = std::max(0, intOr(entry, "tick", 0));
+            key.animation    = stringOr(entry, "animation");
+            key.hideItems    = boolOr(entry, "hideItems", true);
+            loaded.poseKeys.push_back(std::move(key));
         }
     }
     if (auto const* tracks = arrayAt(document, "videoTracks")) {

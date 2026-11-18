@@ -394,6 +394,17 @@ bool ReplayEditor::pasteAtPlayhead() { return mTimelinePanel.pasteAtPlayhead(fra
 
 bool ReplayEditor::addMarkerAtPlayhead() { return mTimelinePanel.addMarkerAtPlayhead(frameContext()); }
 
+void ReplayEditor::addPoseKeyAtPlayhead(std::string const& subject, std::string const& label) {
+    auto const ctx = frameContext();
+    mTimelinePanel.addPoseKeyAt(
+        ctx,
+        subject,
+        label,
+        ctx.state.currentTick,
+        std::string{state::editing::model::PoseKey::DefaultAnimation}
+    );
+}
+
 bool ReplayEditor::selectCameraByIndex(std::size_t index) {
     auto const project = state().project;
     if (!project || index >= project->cameras.size()) return false;

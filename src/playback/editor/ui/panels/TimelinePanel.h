@@ -32,6 +32,15 @@ public:
     bool pasteAtPlayhead(PanelContext const& ctx);
     bool addMarkerAtPlayhead(PanelContext const& ctx);
     void seekAdjacentMarker(PanelContext const& ctx, bool forward);
+    // A pose keyframe for the entity (a player UUID or "entity:" choice) at tick, selected once it exists. An empty
+    // animation hands the entity back to its recorded animation.
+    void addPoseKeyAt(
+        PanelContext const& ctx,
+        std::string const&  subject,
+        std::string const&  label,
+        int                 tick,
+        std::string const&  animation
+    );
     void zoomIn();
     void zoomOut();
     void resetZoom();
@@ -84,6 +93,7 @@ private:
     // Selections that point at objects an queued action has not created yet; applied once they exist.
     void queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys);
     void queueMarkerSelection(std::string markerId);
+    void queuePoseKeySelection(std::string poseKeyId);
     void applyPendingSelection(PanelContext const& ctx);
     [[nodiscard]] std::string markerAt(
         PanelContext const&  ctx,
@@ -165,10 +175,20 @@ private:
     std::string           mMarkerMenuId;
     std::string           mMarkerRenameId;
     std::array<char, 128> mMarkerRenameBuffer{};
+    // Pose keyframes sit on one lane per entity: drag to move, right-click for the menu.
+    std::string mPoseDragId;
+    float       mPoseDragStartX{};
+    int         mPoseDragTick{-1};
+    bool        mPoseDragMoved{};
+    std::string mPoseMenuKeyId;
+    std::string mPoseLaneMenuSubject;
+    std::string mPoseLaneMenuLabel;
+    int         mPoseLaneMenuTick{-1};
     int                   mSnapGuideTick{-1};
 
     std::vector<state::editing::model::SelectedKeyframe> mPendingKeySelection;
     std::string                                          mPendingMarkerSelection;
+    std::string                                          mPendingPoseKeySelection;
     int                                                  mPendingSelectionFrames{};
 };
 

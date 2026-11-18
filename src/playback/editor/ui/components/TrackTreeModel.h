@@ -13,7 +13,8 @@ struct EditorStateExt;
 
 namespace playback::editor::ui {
 
-enum class TrackRowKind { Camera };
+// Camera tracks, then one lane per entity that has pose keyframes.
+enum class TrackRowKind { Camera, Pose };
 
 struct TrackTreeRow {
     TrackRowKind                           kind;
@@ -25,6 +26,8 @@ struct TrackTreeRow {
     bool                                   locked{};
     bool                                   enabled{true};
     state::editing::model::CameraTrackKind trackKind{state::editing::model::CameraTrackKind::Keyframe};
+    // Pose lanes: the entity their keys pose.
+    std::string poseSubject;
 };
 
 class TrackTreeModel {

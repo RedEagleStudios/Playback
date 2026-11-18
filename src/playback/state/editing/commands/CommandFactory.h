@@ -70,7 +70,7 @@ public:
     static std::unique_ptr<model::IEditCommand> createRenameMarker(const std::string& id, const std::string& label);
 
     static std::unique_ptr<model::IEditCommand> createSetWorldSettings(model::WorldSettings const& settings);
-    static std::unique_ptr<model::IEditCommand> createSetPoseClips(std::vector<model::PoseClip> clips);
+    static std::unique_ptr<model::IEditCommand> createSetPoseKeys(std::vector<model::PoseKey> keys);
 };
 
 } // namespace playback::state::editing::command

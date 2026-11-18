@@ -56,6 +56,7 @@ public:
     bool               copySelection() override;
     bool               pasteAtPlayhead() override;
     bool               addMarkerAtPlayhead() override;
+    void               addPoseKeyAtPlayhead(std::string const& subject, std::string const& label) override;
     bool               selectCameraByIndex(std::size_t index);
     // Any thread: selects this keyframe at the start of the next frame, as clicking it would. Used by the control API.
     void requestKeyframeSelection(std::string trackId, int tick);

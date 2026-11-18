@@ -46,7 +46,6 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
 
     float const cameraHeight = metrics::cameraRow();
 
-    // Cameras are the only editable tracks; the world and marker rows had nothing to show.
     for (int index = 0; index < static_cast<int>(state.cameras.size()); ++index) {
         const auto& camera = state.cameras[index];
         if (!cameraMatchesSearch(camera, state.worldActor, mSearch)) continue;
@@ -62,6 +61,27 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
              camera.kind}
         );
     }
+
+    // One lane per posed entity, in the order its first key was made, named as its latest key names it.
+    size_t const firstPoseRow = mRows.size();
+    for (auto const& key : state.poseKeys) {
+        auto row = std::find_if(mRows.begin() + static_cast<std::ptrdiff_t>(firstPoseRow), mRows.end(), [&](auto const& existing) {
+            return existing.poseSubject == key.subject;
+        });
+        std::string const label = key.subjectLabel.empty() ? key.subject : key.subjectLabel;
+        if (row != mRows.end()) {
+            row->name = label;
+            continue;
+        }
+        TrackTreeRow pose{TrackRowKind::Pose, "pose:" + key.subject, label};
+        pose.height      = cameraHeight;
+        pose.trackKind   = CameraTrackKind::FirstPerson;
+        pose.poseSubject = key.subject;
+        mRows.push_back(std::move(pose));
+    }
+    std::erase_if(mRows, [&](TrackTreeRow const& row) {
+        return row.kind == TrackRowKind::Pose && !containsInsensitive(row.name, mSearch);
+    });
 }
 
 const std::vector<TrackTreeRow>& TrackTreeModel::rows() const { return mRows; }

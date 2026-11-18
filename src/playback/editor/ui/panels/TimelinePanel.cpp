@@ -205,6 +205,10 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
     } else if (auto const* selectedMarker = ctx.selection.getAs<state::editing::model::SelectedMarker>()) {
         action.type = EditorActionType::DeleteMarker;
         action.id   = selectedMarker->markerId;
+    } else if (auto const* selectedPose = ctx.selection.getAs<state::editing::model::SelectedPoseKey>()) {
+        action.type     = EditorActionType::SetPoseKeys;
+        action.poseKeys = project->poseKeys;
+        std::erase_if(*action.poseKeys, [&](auto const& key) { return key.id == selectedPose->poseKeyId; });
     } else if (auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
                selectedCamera && project->cameras.size() > 1) {
         action.type = EditorActionType::DeleteCamera;
@@ -369,13 +373,22 @@ int TimelinePanel::snapToEditPoints(
 void TimelinePanel::queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys) {
     mPendingKeySelection = std::move(keys);
     mPendingMarkerSelection.clear();
+    mPendingPoseKeySelection.clear();
     mPendingSelectionFrames = kPendingSelectionFrames;
 }
 
 void TimelinePanel::queueMarkerSelection(std::string markerId) {
     mPendingKeySelection.clear();
     mPendingMarkerSelection = std::move(markerId);
+    mPendingPoseKeySelection.clear();
     mPendingSelectionFrames = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queuePoseKeySelection(std::string poseKeyId) {
+    mPendingKeySelection.clear();
+    mPendingMarkerSelection.clear();
+    mPendingPoseKeySelection = std::move(poseKeyId);
+    mPendingSelectionFrames  = kPendingSelectionFrames;
 }
 
 void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
@@ -385,7 +398,12 @@ void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     bool const lastChance = --mPendingSelectionFrames == 0;
 
     bool done = false;
-    if (!mPendingMarkerSelection.empty()) {
+    if (!mPendingPoseKeySelection.empty()) {
+        if (std::ranges::any_of(project->poseKeys, [&](auto const& key) { return key.id == mPendingPoseKeySelection; })) {
+            ctx.selection.select(state::editing::model::SelectedPoseKey{mPendingPoseKeySelection});
+            done = true;
+        }
+    } else if (!mPendingMarkerSelection.empty()) {
         if (std::ranges::any_of(project->markers, [&](auto const& marker) { return marker.id == mPendingMarkerSelection; })) {
             ctx.selection.select(state::editing::model::SelectedMarker{mPendingMarkerSelection});
             done = true;
@@ -405,8 +423,47 @@ void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     if (done || lastChance) {
         mPendingKeySelection.clear();
         mPendingMarkerSelection.clear();
+        mPendingPoseKeySelection.clear();
         mPendingSelectionFrames = 0;
     }
+}
+
+void TimelinePanel::addPoseKeyAt(
+    PanelContext const& ctx,
+    std::string const&  subject,
+    std::string const&  label,
+    int                 tick,
+    std::string const&  animation
+) {
+    using state::editing::model::PoseKey;
+    auto const project = ctx.state.project;
+    if (!project || subject.empty()) return;
+    auto keys = project->poseKeys;
+    // One key per entity and tick: adding where one stands replaces its pose.
+    auto const existing = std::ranges::find_if(keys, [&](PoseKey const& key) {
+        return key.subject == subject && key.tick == tick;
+    });
+    std::string id;
+    if (existing != keys.end()) {
+        id                  = existing->id;
+        existing->animation = animation;
+    } else {
+        for (size_t number = keys.size() + 1;; ++number) {
+            id = "pose-" + std::to_string(number);
+            if (std::ranges::find(keys, id, &PoseKey::id) == keys.end()) break;
+        }
+        PoseKey key;
+        key.id           = id;
+        key.subject      = subject;
+        key.subjectLabel = label;
+        key.tick         = std::clamp(tick, 0, ctx.state.totalTicks);
+        key.animation    = animation;
+        keys.push_back(std::move(key));
+    }
+    EditorAction action{EditorActionType::SetPoseKeys};
+    action.poseKeys = std::move(keys);
+    ctx.submitAction(std::move(action));
+    queuePoseKeySelection(std::move(id));
 }
 
 std::string TimelinePanel::markerAt(
@@ -636,6 +693,25 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 action.kind = kind;
                 ctx.submitAction(std::move(action));
             }
+        }
+        // A pose lane starts with a key at the playhead for the entity picked here.
+        if (ImGui::BeginMenu("playback.refactorEditor.timeline.addPoseKey"_tr().c_str())) {
+            bool any = false;
+            for (auto const& entity : replay::ReplaySession::getInstance().replayEntities()) {
+                if (entity.recorder || entity.choice.empty()) continue;
+                any = true;
+                if (ImGui::MenuItem((entity.label + "##pose-" + entity.choice).c_str())) {
+                    addPoseKeyAt(
+                        ctx,
+                        entity.choice,
+                        entity.label,
+                        ctx.state.currentTick,
+                        std::string{state::editing::model::PoseKey::DefaultAnimation}
+                    );
+                }
+            }
+            if (!any) ImGui::TextDisabled("%s", "playback.refactorEditor.viewport.noEntityHere"_tr().c_str());
+            ImGui::EndMenu();
         }
         widgets::endAnchoredPopup();
     }
@@ -1298,6 +1374,41 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
         }
         widgets::endAnchoredPopup();
     }
+
+    if (widgets::beginAnchoredPopup("##timeline-pose-menu")) {
+        if (project) {
+            auto const key = std::ranges::find(project->poseKeys, mPoseMenuKeyId, &state::editing::model::PoseKey::id);
+            if (key != project->poseKeys.end()) {
+                if (ImGui::MenuItem("playback.refactorEditor.timeline.seekToPoseKey"_tr().c_str())) {
+                    seekTo(ctx, key->tick);
+                }
+                if (ImGui::MenuItem("playback.refactorEditor.timeline.deletePoseKey"_tr().c_str(), "Delete")) {
+                    EditorAction action{EditorActionType::SetPoseKeys};
+                    action.poseKeys = project->poseKeys;
+                    std::erase_if(*action.poseKeys, [&](auto const& entry) { return entry.id == mPoseMenuKeyId; });
+                    ctx.submitAction(std::move(action));
+                    ctx.selection.clear();
+                }
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-pose-lane-menu")) {
+        if (ImGui::MenuItem("playback.refactorEditor.timeline.addPoseKeyHere"_tr().c_str())) {
+            addPoseKeyAt(
+                ctx,
+                mPoseLaneMenuSubject,
+                mPoseLaneMenuLabel,
+                mPoseLaneMenuTick,
+                std::string{state::editing::model::PoseKey::DefaultAnimation}
+            );
+        }
+        if (ImGui::MenuItem("playback.refactorEditor.timeline.addInGameKeyHere"_tr().c_str())) {
+            addPoseKeyAt(ctx, mPoseLaneMenuSubject, mPoseLaneMenuLabel, mPoseLaneMenuTick, {});
+        }
+        widgets::endAnchoredPopup();
+    }
 }
 
 void TimelinePanel::drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput) {
@@ -1449,6 +1560,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mBoxSelecting              = false;
         mMarkerDragId.clear();
         mMarkerDragMoved = false;
+        mPoseDragId.clear();
+        mPoseDragMoved = false;
     }
     mSnapGuideTick = -1;
     applyPendingSelection(ctx);
@@ -1818,6 +1931,74 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 mBoxClickCameraId = camera.id;
             }
         }
+        if (row.kind == TrackRowKind::Pose) {
+            using state::editing::model::PoseKey;
+            auto const* selectedPose = ctx.selection.getAs<state::editing::model::SelectedPoseKey>();
+            ImU32 const laneColor    = theme::trackColor(bandIndex);
+            std::vector<PoseKey const*> laneKeys;
+            for (auto const& key : project->poseKeys) {
+                if (key.subject == row.poseSubject) laneKeys.push_back(&key);
+            }
+            auto const shownTick = [&](PoseKey const& key) {
+                return mPoseDragId == key.id && mPoseDragMoved ? mPoseDragTick : key.tick;
+            };
+            std::ranges::stable_sort(laneKeys, {}, [&](PoseKey const* key) { return shownTick(*key); });
+            // A pose holds until the entity's next key; the stretch it covers is filled.
+            for (size_t index = 0; index < laneKeys.size(); ++index) {
+                if (laneKeys[index]->animation.empty()) continue;
+                float const startX = scale.xAt(static_cast<float>(shownTick(*laneKeys[index])));
+                float const endX   = index + 1 < laneKeys.size()
+                                       ? scale.xAt(static_cast<float>(shownTick(*laneKeys[index + 1])))
+                                       : scale.xAt(static_cast<float>(state.totalTicks));
+                if (endX < layout.canvasLeft || startX > layout.fullMax.x) continue;
+                drawList->AddRectFilled(
+                    {std::max(startX, layout.canvasLeft), y + 3.0f},
+                    {std::min(endX, layout.fullMax.x), rowBottom - 3.0f},
+                    theme::withAlpha(laneColor, theme::kTrackFillSelectedAlpha)
+                );
+            }
+            ImVec2 const mouse = ImGui::GetMousePos();
+            for (auto const* entry : laneKeys) {
+                auto const& key = *entry;
+                float const x   = scale.xAt(static_cast<float>(shownTick(key)));
+                if (x < layout.canvasLeft - keyRadius || x > layout.fullMax.x + keyRadius) continue;
+                bool const  selected = selectedPose && selectedPose->poseKeyId == key.id;
+                float const radius   = selected ? keyRadius + 1.0f : keyRadius;
+                ImU32 const fill     = selected ? theme::kKeyframeSelected : theme::kKeyframe;
+                ImU32 const outline  = selected ? theme::kIconHighlight : theme::kKeyframeOutline;
+                // A square hands the entity back to its recorded animation.
+                if (key.animation.empty()) drawKeyframeSquare(drawList, x, centerY, radius, fill, outline);
+                else drawKeyframeDiamond(drawList, x, centerY, radius, fill, outline);
+                bool const overKey = std::abs(mouse.x - x) <= radius + 3.0f && mouse.y >= y && mouse.y <= rowBottom;
+                if (allowInput && !clickConsumed && overKey && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    clickConsumed = true;
+                    ctx.selection.select(state::editing::model::SelectedPoseKey{key.id});
+                    mPoseMenuKeyId = key.id;
+                    widgets::openAnchoredPopup(
+                        "##timeline-pose-menu",
+                        {x - radius, centerY - radius},
+                        {x + radius, centerY + radius}
+                    );
+                }
+                if (allowInput && !clickConsumed && overKey && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed = true;
+                    ctx.selection.select(state::editing::model::SelectedPoseKey{key.id});
+                    mPoseDragId     = key.id;
+                    mPoseDragStartX = mouse.x;
+                    mPoseDragTick   = key.tick;
+                    mPoseDragMoved  = false;
+                }
+            }
+            if (allowInput && !clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Right)
+                && contains({layout.canvasLeft, y + 3.0f}, {layout.fullMax.x, rowBottom - 3.0f}, mouse)) {
+                clickConsumed        = true;
+                mPoseLaneMenuSubject = row.poseSubject;
+                mPoseLaneMenuLabel   = row.name;
+                mPoseLaneMenuTick    = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                float const anchorX  = scale.xAt(static_cast<float>(mPoseLaneMenuTick));
+                widgets::openAnchoredPopup("##timeline-pose-lane-menu", {anchorX, y + 3.0f}, {anchorX, rowBottom - 3.0f});
+            }
+        }
         y = rowBottom;
     }
 
@@ -1919,6 +2100,39 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             mDraggingKeyframeCameraId.clear();
             mDraggingKeyframeStartTick = -1;
             mDraggingKeyframeMoved     = false;
+        }
+    }
+
+    if (allowInput && !mPoseDragId.empty()) {
+        auto const key = std::ranges::find(project->poseKeys, mPoseDragId, &state::editing::model::PoseKey::id);
+        if (key == project->poseKeys.end()) {
+            mPoseDragId.clear();
+        } else {
+            if (std::abs(ImGui::GetMousePos().x - mPoseDragStartX) >= 2.0f) mPoseDragMoved = true;
+            if (mPoseDragMoved) {
+                mPoseDragTick      = dragTarget([](std::string const&, int) { return false; });
+                float const guideX = scale.xAt(static_cast<float>(mPoseDragTick));
+                drawList->AddLine(
+                    {guideX, layout.bodyTop},
+                    {guideX, layout.bodyBottom},
+                    theme::withAlpha(theme::kKeyframeSelected, 180),
+                    1.0f
+                );
+            }
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (!mPoseDragMoved) {
+                    submitSeek(ctx, key->tick);
+                } else if (mPoseDragTick != key->tick) {
+                    EditorAction action{EditorActionType::SetPoseKeys};
+                    action.poseKeys = project->poseKeys;
+                    for (auto& moved : *action.poseKeys) {
+                        if (moved.id == mPoseDragId) moved.tick = mPoseDragTick;
+                    }
+                    ctx.submitAction(std::move(action));
+                }
+                mPoseDragId.clear();
+                mPoseDragMoved = false;
+            }
         }
     }
 

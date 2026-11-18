@@ -36,6 +36,8 @@ public:
     virtual bool               copySelection()             = 0;
     virtual bool               pasteAtPlayhead()           = 0;
     virtual bool               addMarkerAtPlayhead()       = 0;
+    // A pose keyframe for the entity (a player UUID or "entity:" choice) at the playhead, then selected.
+    virtual void addPoseKeyAtPlayhead(std::string const& subject, std::string const& label) = 0;
 
     // View preferences the inspector's settings page edits; they live in the panels that consume them.
     [[nodiscard]] virtual bool  isInfoOverlayVisible() const        = 0;
