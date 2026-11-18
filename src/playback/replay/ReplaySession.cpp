@@ -47,12 +47,14 @@
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
+#include "mc/entity/components/DynamicRenderOffsetComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/ItemInUseTicksDuringMovementComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MobWalkAnimationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/entity/components/MovementWasCorrectedComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
@@ -361,7 +363,17 @@ void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
 
-    auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
+    auto& context = actor.getEntityContext();
+    context.removeComponent<MovementWasCorrectedComponent>();
+    if (auto dynamicOffset = context.tryGetComponent<DynamicRenderOffsetComponent>()) {
+        dynamicOffset->mCurrentOffset      = Vec3{};
+        dynamicOffset->mNormalizedOffset   = Vec3{};
+        dynamicOffset->mPreviousOffset     = Vec3{};
+        dynamicOffset->mInterpolationSpeed = 0.0f;
+        dynamicOffset->mCurrentPosDelta    = Vec3{};
+    }
+
+    auto const interpolator = context.tryGetComponent<MovementInterpolatorComponent>();
     if (!interpolator) return;
 
     *interpolator->mPos          = position;
@@ -1411,8 +1423,9 @@ void ReplaySession::clearReplayPlayers(bool clearChoice) {
 void ReplaySession::refreshReplayPlayerRoster() {
     if (!mReplayPlayer || mPendingReplayDimension || mPendingSnapshotApply || mChunkInjectionPending) return;
 
+    auto&      level     = mReplayPlayer->getLevel();
     auto const dimension = mReplayPlayer->getDimensionId();
-    auto const actors    = mReplayPlayer->getLevel().getRuntimeActorList();
+    auto const actors    = level.getRuntimeActorList();
     // A remote player's actor carries no UUID on the client; its AddPlayer named it, keyed by unique ID.
     std::unordered_map<int64_t, std::string> uuidById;
     {
@@ -1426,23 +1439,27 @@ void ReplaySession::refreshReplayPlayerRoster() {
     };
     std::unordered_map<std::string, LivePlayer> live;
     live.reserve(actors.size());
-    for (auto const* actor : actors) {
-        if (!actor || actor == mReplayPlayer || !actor->isPlayer()) continue;
-        if (actor->getDimensionId() != dimension) continue;
-        auto const* player = static_cast<Player const*>(actor);
+    auto const collectPlayer = [&](Player const& player) {
+        if (&player == mReplayPlayer || player.getDimensionId() != dimension) return;
+        auto const  uniqueId = player.getOrCreateUniqueID();
         std::string uuid;
-        if (auto const& own = player->getUuid(); own != mce::UUID{}) {
+        if (auto const& own = player.getUuid(); own != mce::UUID{}) {
             uuid = own.asString();
-        } else if (auto const listed = uuidById.find(actor->getOrCreateUniqueID().rawID); listed != uuidById.end()) {
+        } else if (auto const listed = uuidById.find(uniqueId.rawID); listed != uuidById.end()) {
             uuid = listed->second;
         }
-        if (uuid.empty()) continue;
-        bool const recorder = mRecordedLocalPlayerId && actor->getOrCreateUniqueID() == *mRecordedLocalPlayerId;
-        live.insert_or_assign(
-            std::move(uuid),
-            LivePlayer{actor->getOrCreateUniqueID(), firstNameLine(actor->getNameTag()), recorder}
-        );
+        if (uuid.empty()) return;
+        bool const recorder = mRecordedLocalPlayerId && uniqueId == *mRecordedLocalPlayerId;
+        live.insert_or_assign(std::move(uuid), LivePlayer{uniqueId, firstNameLine(player.getNameTag()), recorder});
+    };
+    for (auto const* actor : actors) {
+        if (!actor || !actor->isPlayer()) continue;
+        collectPlayer(static_cast<Player const&>(*actor));
     }
+    level.forEachPlayer([&](Player& player) {
+        collectPlayer(player);
+        return true;
+    });
 
     std::lock_guard                 lock(mReplayPlayersMutex);
     bool                            changed = false;
@@ -1948,6 +1965,7 @@ void ReplaySession::updateReplaySubjectPosture(bool snap) {
             actor->getStatusFlag(ActorFlags::Sneaking),
             actor->getStatusFlag(ActorFlags::Swimming),
             actor->getStatusFlag(ActorFlags::Crawling),
+            actor->getStatusFlag(ActorFlags::Gliding),
             actor->getStatusFlag(ActorFlags::Sleeping),
             actor->isSleeping(),
         }
@@ -2271,16 +2289,68 @@ void ReplaySession::updateObserverPreview() {
     mObserverPreviewInRange = true;
 
     // First-person spectator: camera sits at the feet, so the pose is the feet position.
-    Vec3 const     feetPosition{sample->state.x, sample->state.y, sample->state.z};
-    Vec2 const     rotation{sample->state.pitch, sample->state.yaw};
+    Vec3 const feetPosition{sample->state.x, sample->state.y, sample->state.z};
+    Vec2 const rotation{sample->state.pitch, sample->state.yaw};
+    mLastObserverPreviewFeet     = feetPosition;
+    mLastObserverPreviewRotation = rotation;
+    moveObserverTo(feetPosition, rotation);
+}
+
+void ReplaySession::moveObserverTo(Vec3 const& feetPosition, Vec2 const& rotation) {
+    forceFirstPersonCamera();
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    mLastObserverPreviewFeet        = feetPosition;
-    mLastObserverPreviewRotation    = rotation;
+                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
+}
+
+void ReplaySession::syncPreviewObserverForTick(int targetTick, bool onlyIfMoved) {
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || !mReplayPlayer || !mReplayWorldJoined
+        || !mNetworkHandler || mPendingReplayDimension) {
+        return;
+    }
+    if (isFollowViewActive() || editor::input::isGameInputCaptured()) return;
+    auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
+    if (!timeline) return;
+
+    auto const moveIfNeeded = [&](Vec3 const& feetPosition, Vec2 const& rotation) {
+        if (onlyIfMoved && mReplayPlayer->getPosition().distanceToSqr(feetPosition) <= 1e-4f) return;
+        moveObserverTo(feetPosition, rotation);
+    };
+
+    auto const sampleTime = visuals::ReplaySampleTime::fromPreview(targetTick, 0.0f);
+    if (sampleTime) {
+        if (auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *sampleTime)) {
+            moveIfNeeded(
+                Vec3{sample->state.x, sample->state.y, sample->state.z},
+                Vec2{sample->state.pitch, sample->state.yaw}
+            );
+            return;
+        }
+    }
+
+    auto const shot = timeline->shotAt(targetTick);
+    if (!shot || shot.kind() == state::editing::model::CameraTrackKind::Keyframe) return;
+    auto const id = resolveReplaySubjectId(shot.subject);
+    if (!id) return;
+    auto* actor = mReplayPlayer->getLevel().fetchEntity(*id, false);
+    if (!actor || actor == mReplayPlayer) return;
+    moveIfNeeded(actor->getPosition(), actor->getRotation());
+}
+
+void ReplaySession::syncSeekObserver() {
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler || mPendingReplayDimension) return;
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) {
+        if (!mExportCameraViewpoint) return;
+        Vec3 const target{mExportCameraViewpoint->x, mExportCameraViewpoint->y, mExportCameraViewpoint->z};
+        if (mReplayPlayer->getPosition().distanceToSqr(target) > 1e-4f) {
+            updateExportObserver(*mExportCameraViewpoint);
+        }
+        return;
+    }
+    syncPreviewObserverForTick(mSeekTargetTick, true);
 }
 
 void ReplaySession::markReplayTickAdvanced() noexcept {
@@ -2388,15 +2458,7 @@ void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint)
         return;
     }
 
-    forceFirstPersonCamera();
-    Vec3 const     feetPosition{viewpoint.x, viewpoint.y, viewpoint.z};
-    Vec2 const     rotation{viewpoint.pitch, viewpoint.yaw};
-    ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
-    bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    teleportReplayPlayer(feetPosition, rotation);
-    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
-    if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
+    moveObserverTo(Vec3{viewpoint.x, viewpoint.y, viewpoint.z}, Vec2{viewpoint.pitch, viewpoint.yaw});
 }
 
 std::unique_ptr<visuals::ScopedReplayEntityPose>
@@ -2863,6 +2925,7 @@ void ReplaySession::tick() {
                 }
                 refreshReplayPlayerRoster();
                 refreshReplaySubjectBinding();
+                syncSeekObserver();
                 // A tick resumed after its entity's chunks landed already ticked the level the first time through.
                 bool const resumingTick = std::exchange(mSeekTickResuming, false);
                 // Export seeks keep the clear at the landing frame so their first frames stay unchanged.
@@ -2933,6 +2996,7 @@ void ReplaySession::tick() {
              tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
              ++tick) {
             int const before = mCurrentTick;
+            syncPreviewObserverForTick(before + 1);
             if (!advanceReplayTick(true)) break;
             if (mCurrentTick != before) markReplayTickAdvanced();
         }
@@ -3764,8 +3828,8 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
     } else if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive && mExportCameraViewpoint) {
         auto const& position = *mExportCameraViewpoint;
-        auto const& rotation = replayPlayer->getRotation();
-        view                 = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
+        view                 = PlaybackView{position.x, position.y, position.z, position.yaw, position.pitch};
+        replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
     } else {
         auto const& position = replayPlayer->getPosition();
         auto const& rotation = replayPlayer->getRotation();
