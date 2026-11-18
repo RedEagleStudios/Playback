@@ -19,7 +19,7 @@ KeyframeTrack::KeyframeTrack(KeyMap const& keyframes) : mKeyframes(keyframes.beg
 bool KeyframeTrack::empty() const noexcept { return mKeyframes.empty(); }
 
 CameraKeyframeChange KeyframeTrack::changeFromKeyframe(CameraKeyframe const& key) const {
-    return {key.position, key.yaw, key.pitch, key.roll, key.fov};
+    return {key.position, key.yaw, key.pitch, key.roll, key.fov, key.shake};
 }
 
 CameraKeyframeChange KeyframeTrack::smoothChange(KeyMapIter left, float amount) const {
@@ -61,6 +61,7 @@ CameraKeyframeChange KeyframeTrack::smoothChange(KeyMapIter left, float amount) 
         angle(beforeKey.pitch, leftKey.pitch, rightKey.pitch, afterKey.pitch),
         angle(beforeKey.roll, leftKey.roll, rightKey.roll, afterKey.roll),
         centripetalCatmullRom(beforeKey.fov, leftKey.fov, rightKey.fov, afterKey.fov, time1, time2, time3, amount),
+        leftKey.shake + (rightKey.shake - leftKey.shake) * amount,
     };
 }
 
@@ -102,12 +103,16 @@ CameraKeyframeChange KeyframeTrack::hermiteChange(KeyMapIter left, long double t
         interpolatePolynomial(ticks, y, tick),
         interpolatePolynomial(ticks, z, tick),
     };
+    // Shake blends straight from key to key: a curve through its neighbours would stir two still keys.
+    auto const  right  = std::next(left);
+    float const amount = clampUnit(static_cast<float>((tick - left->first) / (right->first - left->first)));
     return {
         position,
         wrapDegrees(interpolatePolynomial(ticks, yaw, tick)),
         wrapDegrees(interpolatePolynomial(ticks, pitch, tick)),
         wrapDegrees(interpolatePolynomial(ticks, roll, tick)),
         interpolatePolynomial(ticks, fov, tick),
+        left->second.shake + (right->second.shake - left->second.shake) * amount,
     };
 }
 

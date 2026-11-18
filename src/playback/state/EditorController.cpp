@@ -299,6 +299,15 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             logger().debug("Captured camera keyframe (camera={}, tick={})", action.id, action.tick);
             // A person track's first key views whoever the user follows; later keys keep the previous subject.
             captured->subject = replay::ReplaySession::getInstance().userReplaySubjectChoice();
+            // The live camera carries no shake, so a new key keeps the shake of the key before it.
+            auto const& cameras = mProject.cameras;
+            auto const  camera  = std::ranges::find(cameras, action.id, &state::editing::model::CameraEntity::id);
+            if (camera != cameras.end()) {
+                if (auto const next = camera->keysByTick.lower_bound(action.tick); next != camera->keysByTick.begin()) {
+                    captured->shake          = std::prev(next)->second.shake;
+                    captured->shakeFrequency = std::prev(next)->second.shakeFrequency;
+                }
+            }
             mCommandStack.push(
                 CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)),
                 mProject
@@ -361,6 +370,17 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SetCameraFollow:
         if (action.followSettings) {
             mCommandStack.push(CommandFactory::createSetCameraFollow(action.id, *action.followSettings), mProject);
+        }
+        break;
+    case EditorActionType::SetKeyframeShake:
+        mCommandStack.push(
+            CommandFactory::createSetCameraKeyframeShake(action.id, action.tick, action.speed, action.shakeFrequency),
+            mProject
+        );
+        break;
+    case EditorActionType::SetCameraShake:
+        if (action.shakeSettings) {
+            mCommandStack.push(CommandFactory::createSetCameraShake(action.id, *action.shakeSettings), mProject);
         }
         break;
     case EditorActionType::RenameCamera:

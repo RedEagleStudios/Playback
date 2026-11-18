@@ -5,6 +5,7 @@
 #include "playback/state/editing/models/WorldSettings.h"
 
 #include <array>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -27,8 +28,19 @@ private:
     void drawSettingsPage(PanelContext const& ctx);
     void drawOptiPistonSection();
     void drawWorldSection(PanelContext const& ctx);
+    // The Rendered pack's own options, laid out by its screens; values are saved in the project.
+    void drawShaderSection(PanelContext const& ctx);
+    void drawShaderScreen(
+        PanelContext const&                       ctx,
+        integration::ShaderPackInfo const&        pack,
+        std::string const&                        screen,
+        std::map<std::string, std::string> const& projectValues,
+        int                                       depth
+    );
     // A third-person track's framing (FollowSettings).
     void drawFollowSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera);
+    // A keyframe track's shake amounts and seed (ShakeSettings).
+    void drawShakeSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera);
 
     // Each returns true when it owns the current selection and has drawn it.
     bool drawWorldActor(PanelContext const& ctx);
@@ -46,6 +58,10 @@ private:
     std::optional<state::editing::model::WorldSettings> mWorldDraft;
     // The selected third-person track's follow settings while a slider is dragged, by track id.
     std::optional<std::pair<std::string, state::editing::model::FollowSettings>> mFollowDraft;
+    // The selected keyframe track's shake settings while a slider is dragged, by track id.
+    std::optional<std::pair<std::string, state::editing::model::ShakeSettings>> mShakeDraft;
+    // A shader option slider's value index while it is dragged, by option name; the pack reloads on release.
+    std::optional<std::pair<std::string, int>> mShaderSliderDraft;
     // The label field edits a local copy so typing is not overwritten by the project each frame.
     std::string           mMarkerLabelId;
     std::array<char, 128> mMarkerLabelBuffer{};

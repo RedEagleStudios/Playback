@@ -142,6 +142,7 @@ void ReplayEditor::syncViewShading(playback::state::EditorState const& state) {
     if (!inReplay) {
         if (!mViewShadingLive) return;
         mViewShadingLive = false;
+        mShaderPackInfoFor.reset();
         session.setFlatPreview(false);
         integration::restoreArkeShader();
         return;
@@ -151,13 +152,53 @@ void ReplayEditor::syncViewShading(playback::state::EditorState const& state) {
         mShaderPacks     = integration::arkeShaderPacks();
         if (!mRenderShaderPackChosen) mRenderShaderPack = integration::arkeConfiguredShader();
     }
+    if (mShaderPackInfoFor != mRenderShaderPack) {
+        mShaderPackInfoFor = mRenderShaderPack;
+        auto const path    = integration::arkeShaderPackPath(mRenderShaderPack);
+        mShaderPackInfo    = path ? integration::readShaderPack(*path) : std::nullopt;
+        mUserShaderOptions = integration::arkeShaderOptions(mRenderShaderPack);
+    }
     session.setFlatPreview(mViewShading == ViewShading::Flat && !exportLook);
     // An export renders with the Rendered pack whatever the viewport shows. It goes on as the export dialog opens: a
     // pack switched on as the export starts captures its first seconds dark and smeared while its exposure and
     // temporal buffers build up from black.
     static std::string const vanilla;
     bool const               rendered = exportLook || mViewShading == ViewShading::Rendered;
-    integration::applyArkeShader(rendered ? mRenderShaderPack : vanilla);
+    if (!rendered) {
+        integration::applyArkeShader(vanilla);
+        return;
+    }
+    integration::applyArkeShader(
+        mRenderShaderPack,
+        state.project ? shaderOptionsFor(state.project->world) : std::map<std::string, std::string>{}
+    );
+}
+
+std::map<std::string, std::string> ReplayEditor::shaderOptionsFor(state::editing::model::WorldSettings const& world
+) const {
+    std::map<std::string, std::string> options;
+    if (auto const project = world.shaderOptions.find(mRenderShaderPack); project != world.shaderOptions.end()) {
+        options = project->second;
+    }
+    if (!world.overrideFog || !mShaderPackInfo) return options;
+    // The World fog override reaches a pack through the options it declares for it; packs without them keep their
+    // own fog. Each value snaps to the nearest one the pack lists.
+    auto const set = [&](char const* name, float value) {
+        if (auto const* option = mShaderPackInfo->option(name); option && !option->toggle) {
+            if (auto snapped = integration::nearestShaderValue(*option, value); !snapped.empty()) {
+                options.insert_or_assign(name, std::move(snapped));
+            }
+        }
+    };
+    set("FOG_START", world.fogStart);
+    auto const* custom = mShaderPackInfo->option("FOG_CUSTOM");
+    if (!world.overrideFogColor || !custom || !custom->toggle) return options;
+    options.insert_or_assign("FOG_CUSTOM", "true");
+    set("FOG_END", world.fogEnd);
+    set("FOG_COLOR_R", world.fogColor[0]);
+    set("FOG_COLOR_G", world.fogColor[1]);
+    set("FOG_COLOR_B", world.fogColor[2]);
+    return options;
 }
 
 void ReplayEditor::loadLayoutPreferences() {

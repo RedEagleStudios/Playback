@@ -496,6 +496,43 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                     submit(std::move(action));
                 }
             }
+            if (camera->kind != state::editing::model::CameraTrackKind::Keyframe) {
+                // A person track follows each key's subject until its next key; the one under the playhead is shown.
+                property::separator();
+                int const  playhead  = ctx.state.currentTick;
+                auto       governing = camera->keysByTick.upper_bound(playhead);
+                if (governing != camera->keysByTick.begin()) --governing;
+                std::string const subject =
+                    governing == camera->keysByTick.end() ? std::string{} : governing->second.subject;
+                std::string const atPlayhead = "playback.refactorEditor.details.trackPlayerAtPlayhead"_tr(
+                    playerSubjectLabel(ctx.state.replayPlayers, subject)
+                );
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.trackPlayer"_tr().c_str());
+                ImGui::TextUnformatted(atPlayhead.c_str());
+                PlayerPickerResult picked;
+                if (drawPlayerList(
+                        "##track-player-list",
+                        PlayerPickerMode::SegmentSubject,
+                        ctx.state.replayPlayers,
+                        subject,
+                        false,
+                        picked
+                    )
+                    && picked.uuid != subject) {
+                    if (!camera->keysByTick.contains(playhead)) {
+                        EditorAction add{EditorActionType::AddCameraKeyframe};
+                        add.id   = camera->id;
+                        add.tick = playhead;
+                        submit(std::move(add));
+                    }
+                    EditorAction action{EditorActionType::SetKeyframeSubject};
+                    action.id          = camera->id;
+                    action.tick        = playhead;
+                    action.secondaryId = std::move(picked.uuid);
+                    submit(std::move(action));
+                }
+                widgets::itemTooltip("playback.refactorEditor.details.trackPlayerHint"_tr().c_str());
+            }
             property::separator();
             if (property::actionButton("playback.refactorEditor.details.addKeyframeAtPlayhead"_tr().c_str())) {
                 EditorAction action{EditorActionType::AddCameraKeyframe};
@@ -516,6 +553,7 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
             property::endSection();
         }
         if (camera->kind == state::editing::model::CameraTrackKind::ThirdPerson) drawFollowSection(ctx, *camera);
+        if (camera->kind == state::editing::model::CameraTrackKind::Keyframe) drawShakeSection(ctx, *camera);
         return true;
     }
     return false;
@@ -718,6 +756,37 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                         action.speed = std::clamp(fov, 1.0f, 179.0f);
                         submit(std::move(action));
                     }
+
+                    // Strength and frequency go together so one edit is one undo step.
+                    float      shake          = key->second.shake;
+                    float      shakeFrequency = key->second.shakeFrequency;
+                    auto const commitShake    = [&] {
+                        if (!std::isfinite(shake) || !std::isfinite(shakeFrequency)) return;
+                        EditorAction action{EditorActionType::SetKeyframeShake};
+                        action.id             = camera->id;
+                        action.tick           = originalTick;
+                        action.speed          = shake;
+                        action.shakeFrequency = shakeFrequency;
+                        submit(std::move(action));
+                    };
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeStrength"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputFloat("##shake", &shake, 0.0f, 0.0f, "%.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) commitShake();
+                    widgets::itemTooltip("playback.refactorEditor.details.shakeStrengthHint"_tr().c_str());
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeFrequency"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputFloat("##shake-frequency", &shakeFrequency, 0.0f, 0.0f, "%.2f Hz");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) commitShake();
 
                     int interpolation = static_cast<int>(key->second.interpolationType);
                     ImGui::TableNextRow();
@@ -1060,6 +1129,7 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
     }
 
     drawWorldSection(ctx);
+    drawShaderSection(ctx);
 
     ImGui::EndDisabled();
 }
@@ -1226,6 +1296,21 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     edited.fogEnd   = end / 100.0f;
     edited.fogStart = std::min(edited.fogStart, edited.fogEnd);
     drag(changed, edited);
+
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldOverrideFogColor"_tr() + "##set-override-fog-color").c_str(),
+            &world.overrideFogColor
+        ))
+        commit(world);
+    widgets::itemTooltip("playback.refactorEditor.inspector.worldFogColorHint"_tr().c_str());
+    ImGui::BeginDisabled(!world.overrideFogColor);
+    auto color = world.fogColor;
+    ImGui::SetNextItemWidth(-1.0f);
+    changed = ImGui::ColorEdit3("##set-fog-color", color.data(), ImGuiColorEditFlags_Float);
+    edited          = world;
+    edited.fogColor = color;
+    drag(changed, edited);
+    ImGui::EndDisabled();
 
     ImGui::EndDisabled();
 
@@ -1573,6 +1658,70 @@ void DetailsPanel::drawFollowSection(PanelContext const& ctx, state::editing::mo
     property::endSection();
 }
 
+void DetailsPanel::drawShakeSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera) {
+    using editing::model::ShakeSettings;
+    if (!property::beginSection("playback.refactorEditor.details.shake"_tr().c_str())) return;
+
+    bool const    draft  = mShakeDraft && mShakeDraft->first == camera.id;
+    ShakeSettings shake  = draft ? mShakeDraft->second : camera.shake;
+    auto const    commit = [&](ShakeSettings const& edited) {
+        mShakeDraft.reset();
+        EditorAction action{EditorActionType::SetCameraShake};
+        action.id            = camera.id;
+        action.shakeSettings = edited;
+        ctx.submitAction(std::move(action));
+    };
+    // A slider keeps its value here while dragged and becomes one undo step once no control is active any more.
+    auto const slider =
+        [&](std::string const& label, char const* id, float& value, float high, char const* format) {
+            ImGui::TextDisabled("%s", label.c_str());
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::SliderFloat(id, &value, 0.0f, high, format, ImGuiSliderFlags_AlwaysClamp)) {
+                mShakeDraft = {camera.id, shake};
+            }
+        };
+
+    ImGui::BeginDisabled(camera.locked);
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeHint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+    slider(
+        "playback.refactorEditor.details.shakePosition"_tr(),
+        "##shake-position",
+        shake.positionAmount,
+        ShakeSettings::MaxPositionAmount,
+        "%.2f"
+    );
+    slider(
+        "playback.refactorEditor.details.shakeRotation"_tr(),
+        "##shake-rotation",
+        shake.rotationAmount,
+        ShakeSettings::MaxRotationAmount,
+        "%.1f°"
+    );
+    slider(
+        "playback.refactorEditor.details.shakeRoll"_tr(),
+        "##shake-roll",
+        shake.rollAmount,
+        ShakeSettings::MaxRotationAmount,
+        "%.1f°"
+    );
+
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeSeed"_tr().c_str());
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputScalar("##shake-seed", ImGuiDataType_U32, &shake.seed);
+    if (ImGui::IsItemActive()) mShakeDraft = {camera.id, shake};
+    widgets::itemTooltip("playback.refactorEditor.details.shakeSeedHint"_tr().c_str());
+    if (property::actionButton("playback.refactorEditor.details.shakeNewSeed"_tr().c_str())) {
+        shake.seed = editing::model::randomShakeSeed();
+        commit(shake);
+    }
+    ImGui::EndDisabled();
+
+    if (mShakeDraft && mShakeDraft->first == camera.id && !ImGui::IsAnyItemActive()) commit(mShakeDraft->second);
+    property::endSection();
+}
+
 void DetailsPanel::drawOptiPistonSection() {
     // Absent OptiPiston means no section at all, not a disabled one.
     auto const piston = integration::optiPistonSettings();
@@ -1605,6 +1754,125 @@ void DetailsPanel::drawOptiPistonSection() {
     ImGui::EndDisabled();
     ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.optiPistonHint"_tr().c_str());
     property::endSection();
+}
+
+void DetailsPanel::drawShaderSection(PanelContext const& ctx) {
+    if (!ctx.state.project) return;
+    auto const& packName = ctx.commands.renderShaderPack();
+    auto const* pack     = ctx.commands.renderShaderPackInfo();
+    if (packName.empty() || !pack) return;
+    if (!property::beginSection("playback.refactorEditor.inspector.shader"_tr().c_str())) return;
+
+    ImGui::TextDisabled("%s", packName.c_str());
+    auto const&                               world   = ctx.state.project->world;
+    auto const                                project = world.shaderOptions.find(packName);
+    static std::map<std::string, std::string> const none;
+    auto const& projectValues = project != world.shaderOptions.end() ? project->second : none;
+    if (!projectValues.empty()
+        && property::actionButton("playback.refactorEditor.inspector.shaderReset"_tr().c_str())) {
+        auto edited = world;
+        edited.shaderOptions.erase(packName);
+        EditorAction action{EditorActionType::SetWorldSettings};
+        action.worldSettings = std::move(edited);
+        ctx.submitAction(std::move(action));
+    }
+    drawShaderScreen(ctx, *pack, "", projectValues, 0);
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.shaderHint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+    property::endSection();
+}
+
+void DetailsPanel::drawShaderScreen(
+    PanelContext const&                       ctx,
+    integration::ShaderPackInfo const&        pack,
+    std::string const&                        screen,
+    std::map<std::string, std::string> const& projectValues,
+    int                                       depth
+) {
+    auto const entries = pack.screens.find(screen);
+    // A pack's menu nests a few levels at most; this stops a screen that lists itself.
+    if (entries == pack.screens.end() || depth > 8) return;
+    auto const& packName = ctx.commands.renderShaderPack();
+    auto const& user     = ctx.commands.userShaderOptions();
+    // Playback's value for one option; nullopt hands it back to the user's own.
+    auto const set = [&](std::string const& name, std::optional<std::string> value) {
+        auto  edited = ctx.state.project->world;
+        auto& values = edited.shaderOptions[packName];
+        if (value) values.insert_or_assign(name, std::move(*value));
+        else values.erase(name);
+        if (values.empty()) edited.shaderOptions.erase(packName);
+        EditorAction action{EditorActionType::SetWorldSettings};
+        action.worldSettings = std::move(edited);
+        ctx.submitAction(std::move(action));
+    };
+
+    for (auto const& entry : entries->second) {
+        if (entry.size() > 2 && entry.front() == '[' && entry.back() == ']') {
+            auto const sub = entry.substr(1, entry.size() - 2);
+            if (ImGui::TreeNode((pack.text("screen." + sub, sub) + "##shader-screen-" + sub).c_str())) {
+                drawShaderScreen(ctx, pack, sub, projectValues, depth + 1);
+                ImGui::TreePop();
+            }
+            continue;
+        }
+        auto const* option = pack.option(entry);
+        if (!option) continue;
+
+        auto const projectValue = projectValues.find(entry);
+        auto const userValue    = user.find(entry);
+        bool const ours         = projectValue != projectValues.end();
+        auto const value        = ours                     ? projectValue->second
+                                : userValue != user.end() ? userValue->second
+                                                          : option->defaultValue;
+        // Options the project sets are marked; right-clicking one hands it back to the user's own value.
+        auto const label   = (ours ? "* " : "") + pack.text("option." + entry, entry);
+        auto const comment = pack.text("option." + entry + ".comment", "");
+        ImGui::PushID(entry.c_str());
+        if (option->toggle) {
+            bool on = value == "true";
+            if (ImGui::Checkbox(label.c_str(), &on)) set(entry, on ? "true" : "false");
+        } else {
+            ImGui::TextDisabled("%s", label.c_str());
+            auto const current = std::ranges::find(option->values, value);
+            int index = current != option->values.end() ? static_cast<int>(current - option->values.begin()) : 0;
+            if (mShaderSliderDraft && mShaderSliderDraft->first == entry) index = mShaderSliderDraft->second;
+            auto const shown = pack.text("value." + entry + "." + option->values[index], option->values[index]);
+            ImGui::SetNextItemWidth(-1.0f);
+            if (option->slider) {
+                // ImGui reads the format as printf; the value's own text is shown as it is.
+                std::string format;
+                for (char ch : shown) format += ch == '%' ? std::string("%%") : std::string(1, ch);
+                int const last = static_cast<int>(option->values.size()) - 1;
+                if (ImGui::SliderInt("##value", &index, 0, last, format.c_str(), ImGuiSliderFlags_AlwaysClamp)) {
+                    mShaderSliderDraft = {entry, index};
+                }
+                if (ImGui::IsItemDeactivated()) {
+                    if (mShaderSliderDraft && mShaderSliderDraft->first == entry
+                        && option->values[mShaderSliderDraft->second] != value) {
+                        set(entry, option->values[mShaderSliderDraft->second]);
+                    }
+                    mShaderSliderDraft.reset();
+                }
+            } else if (widgets::beginCombo("##value", shown.c_str())) {
+                for (auto const& candidate : option->values) {
+                    auto const text = pack.text("value." + entry + "." + candidate, candidate);
+                    if (ImGui::Selectable(text.c_str(), candidate == value) && candidate != value) {
+                        set(entry, candidate);
+                    }
+                }
+                widgets::endCombo();
+            }
+        }
+        if (!comment.empty()) widgets::itemTooltip(comment.c_str());
+        if (ours && ImGui::BeginPopupContextItem("##reset")) {
+            if (ImGui::MenuItem("playback.refactorEditor.inspector.shaderResetOption"_tr().c_str())) {
+                set(entry, std::nullopt);
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
 }
 
 } // namespace playback::editor::ui

@@ -68,6 +68,14 @@ std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetCameraKeyframeFov(const std::string& id, int tick, float fov) {
     return std::make_unique<SetCameraKeyframeFov>(id, tick, fov);
 }
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraKeyframeShake(
+    const std::string&   id,
+    int                  tick,
+    float                shake,
+    std::optional<float> frequency
+) {
+    return std::make_unique<SetCameraKeyframeShake>(id, tick, shake, frequency);
+}
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetCameraKeyframeSubject(const std::string& id, int tick, const std::string& subject) {
     return std::make_unique<SetCameraKeyframeSubject>(id, tick, subject);
@@ -81,6 +89,10 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraLocked(const
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetCameraFollow(const std::string& id, model::FollowSettings const& follow) {
     return std::make_unique<SetCameraFollow>(id, follow);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetCameraShake(const std::string& id, model::ShakeSettings const& shake) {
+    return std::make_unique<SetCameraShake>(id, shake);
 }
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createRenameCamera(const std::string& id, const std::string& name) {

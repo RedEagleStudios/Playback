@@ -48,9 +48,10 @@ std::string defaultCameraName(model::EditorStateExt const& state, model::CameraT
 
 std::string addFreeCamera(model::EditorStateExt& state, std::string const& name, model::CameraTrackKind kind) {
     model::CameraEntity camera;
-    camera.id   = makeCameraId(state);
-    camera.kind = kind;
-    camera.name = name.empty() ? defaultCameraName(state, kind) : name;
+    camera.id         = makeCameraId(state);
+    camera.kind       = kind;
+    camera.name       = name.empty() ? defaultCameraName(state, kind) : name;
+    camera.shake.seed = model::randomShakeSeed();
     state.cameras.push_back(camera);
     return camera.id;
 }
@@ -63,6 +64,7 @@ std::string createBindingCamera(model::EditorStateExt& state, std::string const&
     camera.id                = makeCameraId(state);
     camera.name              = name.empty() ? actor->name + " (bind)" : name;
     camera.bindingEntityUuid = actor->id;
+    camera.shake.seed        = model::randomShakeSeed();
     actor->boundCameraIds.push_back(camera.id);
     state.cameras.push_back(camera);
     return camera.id;

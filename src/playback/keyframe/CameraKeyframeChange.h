@@ -13,6 +13,8 @@ struct CameraKeyframeChange {
     float                       pitch{};
     float                       roll{};
     float                       fov{70.0f};
+    // Shake strength. Never splined: two still keys must give exactly no shake between them.
+    float                       shake{};
 
     void apply(CameraKeyframeHandler& handler) const;
 

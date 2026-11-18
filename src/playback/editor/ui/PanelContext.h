@@ -3,12 +3,14 @@
 #include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/editor/graphics/ReplayUILayout.h"
 #include "playback/editor/ui/ViewShading.h"
+#include "playback/integration/ShaderPack.h"
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorState.h"
 #include "playback/state/editing/models/SelectionModel.h"
 #include "playback/visuals/ReplayHudVisibility.h"
 
 #include <functional>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -74,6 +76,10 @@ public:
     [[nodiscard]] virtual std::string const&              renderShaderPack() const              = 0;
     virtual void                                          setRenderShaderPack(std::string pack) = 0;
     [[nodiscard]] virtual std::vector<std::string> const& shaderPacks() const                   = 0;
+    // The Rendered pack's options and the user's own values for them (from Arke's settings window); null when Arke
+    // or the pack cannot be read.
+    [[nodiscard]] virtual integration::ShaderPackInfo const*        renderShaderPackInfo() const = 0;
+    [[nodiscard]] virtual std::map<std::string, std::string> const& userShaderOptions() const    = 0;
 };
 
 // Everything a panel needs for one frame, so panels stay callable without the editor singleton.

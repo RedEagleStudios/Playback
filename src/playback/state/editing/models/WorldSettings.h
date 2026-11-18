@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,11 @@ struct WorldSettings {
     // past the start: with no distance to fade over there is no fog at all.
     float fogStart{0.92f};
     float fogEnd{1.0f};
+    // With the fog override: the fog's own colour (sRGB, 0-1). Shader packs only, in Rendered and exports, and only
+    // packs that declare Playback's fog options (FOG_CUSTOM, FOG_END, FOG_COLOR_R/G/B); the game's own fog keeps its
+    // colour.
+    bool                 overrideFogColor{};
+    std::array<float, 3> fogColor{0.74f, 0.82f, 0.92f};
     // Off: the recorded weather plays back. Rain and Thunder fall wherever the biome has precipitation; Thunder also
     // darkens the sky. Lightning bolts are recorded entities and still strike as recorded.
     bool         overrideWeather{};
@@ -60,6 +66,9 @@ struct WorldSettings {
     // Off: the viewer's own graphics mode.
     bool          overrideGraphics{};
     GraphicsStyle graphics{GraphicsStyle::Fancy};
+    // Shader pack option values over the user's own, by pack and option name, in place while the replay is open and
+    // in every export. Values are spelt as the pack lists them.
+    std::map<std::string, std::map<std::string, std::string>> shaderOptions;
     // Off: the viewer's own global resource packs. On: exactly globalPacks, top priority first, in place from when
     // the replay world loads until it closes; the replay world's own packs stay above them.
     bool                    overrideGlobalPacks{};
@@ -94,6 +103,7 @@ struct WorldSettings {
         out.temperature = unit(temperature, -1.0f, 1.0f, 0.0f);
         out.tint        = unit(tint, -1.0f, 1.0f, 0.0f);
         out.fov         = unit(fov, MinFov, MaxFov, 70.0f);
+        for (auto& channel : out.fogColor) channel = unit(channel, 0.0f, 1.0f, 0.0f);
         if (graphics != GraphicsStyle::Simple && graphics != GraphicsStyle::Fancy
             && graphics != GraphicsStyle::VibrantVisuals)
             out.graphics = GraphicsStyle::Fancy;

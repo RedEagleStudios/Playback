@@ -2,6 +2,7 @@
 
 #include "CameraKeyframe.h"
 #include "FollowSettings.h"
+#include "ShakeSettings.h"
 
 #include <map>
 #include <optional>
@@ -9,13 +10,6 @@
 
 namespace playback::state::editing::model {
 
-struct CameraShake {
-    int   startTick{};
-    int   endTick{};
-    float positionAmplitude{};
-    float rotationAmplitude{};
-    float frequency{1.0f};
-};
 struct CameraLimiter {
     Vec3 min{};
     Vec3 max{};
@@ -31,7 +25,6 @@ struct CameraEntity {
     CameraTrackKind               kind{CameraTrackKind::Keyframe};
     bool                          enabled{true};
     std::map<int, CameraKeyframe> keysByTick;
-    std::optional<CameraShake>    shake;
     std::optional<CameraLimiter>  limiter;
     std::string                   bindingEntityUuid;
     int                           bindingMode{};
@@ -39,6 +32,8 @@ struct CameraEntity {
     bool                          locked{};
     // Third-person tracks only: how the camera frames the subject.
     FollowSettings follow;
+    // Keyframe tracks only: how far the keys' shake moves the camera.
+    ShakeSettings shake;
 };
 
 [[nodiscard]] inline bool hasCameraSource(CameraEntity const& camera) noexcept { return !camera.keysByTick.empty(); }

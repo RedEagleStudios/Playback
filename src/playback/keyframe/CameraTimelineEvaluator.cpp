@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <functional>
 #include <iterator>
 #include <utility>
 
@@ -15,25 +17,46 @@ namespace {
 using state::editing::model::CameraEntity;
 using state::editing::model::CameraTrackKind;
 
-float clampUnit(float value) { return std::clamp(value, 0.0f, 1.0f); }
-
 bool isUsableCamera(CameraEntity const& camera) noexcept { return camera.enabled && !camera.keysByTick.empty(); }
 
 bool isKeyframeCamera(CameraEntity const& camera) noexcept {
     return isUsableCamera(camera) && camera.kind == CameraTrackKind::Keyframe;
 }
 
-void applyRotationShake(CameraRenderState& state, state::editing::model::CameraShake const& shake, long double tick) {
-    if (shake.endTick <= shake.startTick || tick < shake.startTick || tick > shake.endTick) return;
-    float const elapsed  = static_cast<float>(tick - static_cast<long double>(shake.startTick));
-    float const phase    = elapsed * shake.frequency * 6.2831853071795864769f;
-    float const envelope = clampUnit(
-        static_cast<float>(
-            (static_cast<long double>(shake.endTick) - tick) / static_cast<long double>(shake.endTick - shake.startTick)
-        )
-    );
-    state.yaw   += std::sin(phase * 1.11f) * shake.rotationAmplitude * envelope;
-    state.pitch += std::cos(phase * 0.91f) * shake.rotationAmplitude * envelope;
+constexpr double TicksPerSecond = 20.0;
+
+// lowbias32 (Chris Wellons): a cheap integer hash whose outputs for neighbouring inputs are unrelated.
+uint32_t mixBits(uint32_t value) {
+    value ^= value >> 16;
+    value *= 0x7feb352dU;
+    value ^= value >> 15;
+    value *= 0x846ca68bU;
+    value ^= value >> 16;
+    return value;
+}
+
+// 0..1 from the top 24 bits, which a float holds exactly.
+float unitFrom(uint32_t bits) { return static_cast<float>(bits >> 8) * (1.0f / 16777216.0f); }
+
+// 1D gradient (Perlin) noise in -1..1: a seeded slope at each whole cycle, blended with a quintic so the offset and
+// its speed stay continuous. It passes through 0 at every whole cycle.
+float gradientNoise(uint32_t seed, double cycles) {
+    double const   cell     = std::floor(cycles);
+    float const    fraction = static_cast<float>(cycles - cell);
+    uint32_t const lattice  = static_cast<uint32_t>(static_cast<int64_t>(cell));
+    auto const     slope    = [seed](uint32_t point) { return unitFrom(mixBits(seed ^ mixBits(point))) * 2.0f - 1.0f; };
+    float const    from     = slope(lattice) * fraction;
+    float const    to       = slope(lattice + 1U) * (fraction - 1.0f);
+    float const    blend    = fraction * fraction * fraction * (fraction * (fraction * 6.0f - 15.0f) + 10.0f);
+    return (from + (to - from) * blend) * 2.0f;
+}
+
+// One shake channel (an axis or an angle) in -1..1. A second, faster octave makes it read as a hand-held wobble
+// rather than a slow swell, and each channel starts at its own offset so the axes never settle at the same moment.
+float shakeNoise(uint32_t seed, uint32_t channel, double cycles) {
+    uint32_t const channelSeed = mixBits(seed + (channel + 1U) * 0x9e3779b9U);
+    double const   start       = cycles + unitFrom(mixBits(channelSeed ^ 0x5bd1e995U));
+    return (gradientNoise(channelSeed, start) + 0.5f * gradientNoise(mixBits(channelSeed), start * 2.0)) / 1.5f;
 }
 
 bool coversTick(CameraEntity const& camera, int64_t tick) noexcept {
@@ -97,6 +120,29 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
         }
         appendSegment();
         mKeyframeTracks.emplace(camera.id, std::move(segments));
+
+        // Tracks without any shake skip the clock, and applyShake with them.
+        if (std::ranges::none_of(camera.keysByTick, [](auto const& entry) { return entry.second.shake > 0.0f; })) {
+            continue;
+        }
+        std::vector<ShakeClockKey> clock;
+        clock.reserve(camera.keysByTick.size());
+        for (auto const& [tick, keyframe] : camera.keysByTick) {
+            ShakeClockKey key{
+                tick,
+                state::editing::model::sanitizedShakeFrequency(keyframe.shakeFrequency),
+                keyframe.interpolationType == state::editing::model::CameraInterpolationType::Hold,
+            };
+            if (!clock.empty()) {
+                auto const&  previous = clock.back();
+                double const seconds  = (tick - previous.tick) / TicksPerSecond;
+                // A Hold key keeps its frequency to the next key; otherwise it moves linearly between them.
+                double const frequency = previous.hold ? previous.frequency : (previous.frequency + key.frequency) * 0.5;
+                key.cycles             = previous.cycles + seconds * frequency;
+            }
+            clock.push_back(key);
+        }
+        mShakeClocks.emplace(camera.id, std::move(clock));
     }
 }
 
@@ -131,8 +177,45 @@ CameraTimelineEvaluator::sampleKeyframes(CameraEntity const& camera, long double
     change->apply(handler);
     auto state = handler.state();
     if (!state) return std::nullopt;
-    applyRotationShake(*state, camera.shake.value_or(state::editing::model::CameraShake{}), tick);
+    applyShake(*state, camera, change->shake, tick);
     return state;
+}
+
+void CameraTimelineEvaluator::applyShake(
+    CameraRenderState&  state,
+    CameraEntity const& camera,
+    float               strength,
+    long double         tick
+) const {
+    strength = std::min(strength, state::editing::model::ShakeSettings::MaxStrength);
+    // Not `<= 0`: a NaN strength must not shake either.
+    if (!(strength > 0.0f)) return;
+    auto const clock = mShakeClocks.find(camera.id);
+    if (clock == mShakeClocks.end() || clock->second.empty()) return;
+
+    // The clock's cycles at the key at or before the tick (the first key before the track), carried on to the tick.
+    auto const&  keys    = clock->second;
+    auto const   right   = std::ranges::upper_bound(keys, tick, std::less{}, [](ShakeClockKey const& key) {
+        return static_cast<long double>(key.tick);
+    });
+    auto const&  left    = right == keys.begin() ? *right : *std::prev(right);
+    double const seconds = static_cast<double>(tick - static_cast<long double>(left.tick)) / TicksPerSecond;
+    double       cycles  = left.cycles + seconds * left.frequency;
+    if (right != keys.begin() && right != keys.end() && !left.hold) {
+        double const span  = (right->tick - left.tick) / TicksPerSecond;
+        cycles            += seconds * seconds / span * (right->frequency - left.frequency) * 0.5;
+    }
+
+    auto const settings = camera.shake.sanitized();
+    auto const offset   = [&](uint32_t channel, float amount) {
+        return strength * amount * shakeNoise(settings.seed, channel, cycles);
+    };
+    state.x     += offset(0, settings.positionAmount);
+    state.y     += offset(1, settings.positionAmount);
+    state.z     += offset(2, settings.positionAmount);
+    state.yaw   += offset(3, settings.rotationAmount);
+    state.pitch += offset(4, settings.rotationAmount);
+    state.roll  += offset(5, settings.rollAmount);
 }
 
 std::optional<CameraTimelineEvaluation>

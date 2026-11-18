@@ -49,12 +49,15 @@ json toJson(model::WorldSettings const& world) {
         {"overrideFog",         world.overrideFog                    },
         {"fogStart",            world.fogStart                       },
         {"fogEnd",              world.fogEnd                         },
+        {"overrideFogColor",    world.overrideFogColor               },
+        {"fogColor",            world.fogColor                       },
         {"overrideWeather",     world.overrideWeather                },
         {"weather",             magic_enum::enum_name(world.weather) },
         {"overrideFov",         world.overrideFov                    },
         {"fov",                 world.fov                            },
         {"overrideGraphics",    world.overrideGraphics               },
         {"graphics",            magic_enum::enum_name(world.graphics)},
+        {"shaderOptions",       world.shaderOptions                  },
         {"overrideGlobalPacks", world.overrideGlobalPacks            },
         {"globalPacks",         std::move(packs)                     },
         {"overrideColor",       world.overrideColor                  },
@@ -75,6 +78,15 @@ json toJson(model::FollowSettings const& follow) {
         {"tripod",     json::array({follow.tripod.x, follow.tripod.y, follow.tripod.z})},
         {"hasTripod",  follow.hasTripod                                                },
         {"smoothing",  follow.smoothing                                                },
+    };
+}
+
+json toJson(model::ShakeSettings const& shake) {
+    return {
+        {"positionAmount", shake.positionAmount},
+        {"rotationAmount", shake.rotationAmount},
+        {"rollAmount",     shake.rollAmount    },
+        {"seed",           shake.seed          },
     };
 }
 
@@ -127,6 +139,8 @@ json stateJson(EditorState const& state) {
                     {"position",      json::array({key.position.x, key.position.y, key.position.z})},
                     {"rotation",      json::array({key.yaw, key.pitch, key.roll})                  },
                     {"fov",           key.fov                                                      },
+                    {"shake",         key.shake                                                    },
+                    {"shakeFrequency", key.shakeFrequency                                          },
                     {"bezier",
                      json::array(
                          {json::array({key.bezierCtrl1.x, key.bezierCtrl1.y}),
@@ -144,6 +158,7 @@ json stateJson(EditorState const& state) {
                 {"keys",    std::move(keys)                   },
             };
             if (camera.kind == model::CameraTrackKind::ThirdPerson) entry["follow"] = toJson(camera.follow);
+            if (camera.kind == model::CameraTrackKind::Keyframe) entry["shake"] = toJson(camera.shake);
             cameras.push_back(std::move(entry));
         }
         auto markers = json::array();
@@ -200,6 +215,10 @@ model::WorldSettings worldFrom(json const& node, model::WorldSettings world) {
     world.overrideFog      = node.value("overrideFog", world.overrideFog);
     world.fogStart         = node.value("fogStart", world.fogStart);
     world.fogEnd           = node.value("fogEnd", world.fogEnd);
+    world.overrideFogColor = node.value("overrideFogColor", world.overrideFogColor);
+    if (auto const color = node.find("fogColor"); color != node.end() && color->is_array() && color->size() == 3) {
+        world.fogColor = {(*color)[0].get<float>(), (*color)[1].get<float>(), (*color)[2].get<float>()};
+    }
     world.overrideWeather  = node.value("overrideWeather", world.overrideWeather);
     if (auto const weather = node.find("weather"); weather != node.end() && weather->is_string()) {
         if (auto const parsed = magic_enum::enum_cast<model::WeatherStyle>(weather->get<std::string>())) {
@@ -212,6 +231,18 @@ model::WorldSettings worldFrom(json const& node, model::WorldSettings world) {
     if (auto const graphics = node.find("graphics"); graphics != node.end() && graphics->is_string()) {
         if (auto const parsed = magic_enum::enum_cast<model::GraphicsStyle>(graphics->get<std::string>())) {
             world.graphics = *parsed;
+        }
+    }
+    // Merged per pack: {"<pack>": {"NAME": "value"}}; a null value drops Playback's value for that option.
+    if (auto const packs = node.find("shaderOptions"); packs != node.end() && packs->is_object()) {
+        for (auto const& [pack, options] : packs->items()) {
+            if (!options.is_object()) continue;
+            auto& values = world.shaderOptions[pack];
+            for (auto const& [name, value] : options.items()) {
+                if (value.is_null()) values.erase(name);
+                else values.insert_or_assign(name, value.is_string() ? value.get<std::string>() : value.dump());
+            }
+            if (values.empty()) world.shaderOptions.erase(pack);
         }
     }
     world.overrideGlobalPacks = node.value("overrideGlobalPacks", world.overrideGlobalPacks);
@@ -251,6 +282,15 @@ model::FollowSettings followFrom(json const& node, model::FollowSettings follow)
     }
     follow.hasTripod = node.value("hasTripod", follow.hasTripod);
     return follow.sanitized();
+}
+
+// A track's shake settings with the fields `node` names replaced.
+model::ShakeSettings shakeFrom(json const& node, model::ShakeSettings shake) {
+    shake.positionAmount = node.value("positionAmount", shake.positionAmount);
+    shake.rotationAmount = node.value("rotationAmount", shake.rotationAmount);
+    shake.rollAmount     = node.value("rollAmount", shake.rollAmount);
+    shake.seed           = node.value("seed", shake.seed);
+    return shake.sanitized();
 }
 
 // Export settings over the defaults; fields it leaves out keep them. The tick range and resolution have no usable
@@ -331,6 +371,17 @@ std::optional<EditorAction> actionFrom(json const& body, EditorState const& stat
             if (camera != state.project->cameras.end()) current = camera->follow;
         }
         action.followSettings = followFrom(*follow, current);
+    }
+    if (auto const shake = body.find("shakeSettings"); shake != body.end()) {
+        model::ShakeSettings current;
+        if (state.project) {
+            auto const camera = std::ranges::find(state.project->cameras, action.id, &model::CameraEntity::id);
+            if (camera != state.project->cameras.end()) current = camera->shake;
+        }
+        action.shakeSettings = shakeFrom(*shake, current);
+    }
+    if (auto const frequency = body.find("shakeFrequency"); frequency != body.end()) {
+        action.shakeFrequency = frequency->get<float>();
     }
     if (auto const bezier = body.find("bezierControls");
         bezier != body.end() && bezier->is_array() && bezier->size() == 2) {

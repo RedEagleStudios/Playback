@@ -4,6 +4,7 @@
 #include "playback/state/editing/models/CameraKeyframe.h"
 #include "playback/state/editing/models/FollowSettings.h"
 #include "playback/state/editing/models/MathTypes.h"
+#include "playback/state/editing/models/ShakeSettings.h"
 #include "playback/state/editing/models/WorldSettings.h"
 
 #include <array>
@@ -58,6 +59,9 @@ enum class EditorActionType {
     SetCameraEnabled,
     SetCameraLocked,
     SetCameraFollow,
+    // A keyframe track key's shake strength in speed and, when set, its frequency in shakeFrequency.
+    SetKeyframeShake,
+    SetCameraShake,
     RenameCamera,
     ClearCameraKeyframes,
     DeleteCamera,
@@ -106,6 +110,10 @@ struct EditorAction {
     std::optional<std::array<editing::model::Vec2, 2>> bezierControls;
     // SetCameraFollow: the third-person track's new follow settings.
     std::optional<editing::model::FollowSettings> followSettings;
+    // SetKeyframeShake: the key's new shake frequency (Hz); none keeps the key's own.
+    std::optional<float> shakeFrequency;
+    // SetCameraShake: the keyframe track's new shake settings.
+    std::optional<editing::model::ShakeSettings> shakeSettings;
 };
 
 } // namespace playback::state

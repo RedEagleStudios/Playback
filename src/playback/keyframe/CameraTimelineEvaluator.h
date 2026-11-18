@@ -51,16 +51,35 @@ private:
         KeyframeTrack track;
     };
 
+    // A keyframe track's shake cycles at each key: integrating the frequency keeps the noise smooth while the
+    // frequency changes, where frequency × time would race through it the later the change comes.
+    struct ShakeClockKey {
+        int    tick{};
+        float  frequency{};
+        bool   hold{};
+        double cycles{};
+    };
+
     state::editing::model::EditorStateExt                            mProject;
     std::optional<std::string>                                       mManualCameraId;
     bool                                                             mHoldOutsideTracks{};
     std::vector<int>                                                 mDimensionTransitionTicks;
     std::unordered_map<std::string, std::vector<CameraTrackSegment>> mKeyframeTracks;
+    std::unordered_map<std::string, std::vector<ShakeClockKey>>      mShakeClocks;
     SubjectViewSampler                                               mSubjectSampler;
 
 private:
     [[nodiscard]] std::optional<CameraRenderState>
     sampleKeyframes(state::editing::model::CameraEntity const& camera, long double tick, bool clamp) const;
+
+    // Adds the track's seeded noise at `strength` (the keys' blended shake) to a sampled pose. Replay time alone
+    // drives it, so the preview and the export shake identically.
+    void applyShake(
+        CameraRenderState&                         state,
+        state::editing::model::CameraEntity const& camera,
+        float                                      strength,
+        long double                                tick
+    ) const;
 
     [[nodiscard]] std::optional<CameraTimelineEvaluation>
     sampleTrack(state::editing::model::CameraEntity const& camera, visuals::ReplaySampleTime const& time) const;

@@ -90,6 +90,12 @@ public:
     [[nodiscard]] std::string const&              renderShaderPack() const override { return mRenderShaderPack; }
     void                                          setRenderShaderPack(std::string pack) override;
     [[nodiscard]] std::vector<std::string> const& shaderPacks() const override { return mShaderPacks; }
+    [[nodiscard]] integration::ShaderPackInfo const* renderShaderPackInfo() const override {
+        return mShaderPackInfo ? &*mShaderPackInfo : nullptr;
+    }
+    [[nodiscard]] std::map<std::string, std::string> const& userShaderOptions() const override {
+        return mUserShaderOptions;
+    }
 
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
@@ -143,6 +149,11 @@ private:
     // has listed the packs and put the view in place; the latter resets when the replay closes.
     bool mRenderShaderPackChosen{};
     bool mViewShadingLive{};
+    // The Rendered pack's options, read when the pack or the replay changes (mShaderPackInfoFor names the pack read),
+    // and the user's own values for them.
+    std::optional<integration::ShaderPackInfo> mShaderPackInfo;
+    std::optional<std::string>                 mShaderPackInfoFor;
+    std::map<std::string, std::string>         mUserShaderOptions;
 
     struct TimelineViewPreferences {
         float zoomScale{1.0f};
@@ -156,6 +167,9 @@ private:
     void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
     void updateExitHold();
+    // The project's option values for the Rendered pack, with the World fog override mapped onto the pack's options.
+    [[nodiscard]] std::map<std::string, std::string> shaderOptionsFor(state::editing::model::WorldSettings const& world
+    ) const;
 
     friend class EditMode;
     friend class RenderMode;

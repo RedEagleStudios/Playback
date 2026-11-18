@@ -109,6 +109,8 @@ json toJson(CameraKeyframe const& key) {
         {"pitch",             key.pitch                              },
         {"roll",              key.roll                               },
         {"fov",               key.fov                                },
+        {"shake",             key.shake                              },
+        {"shakeFrequency",    key.shakeFrequency                     },
         {"interpolationType", static_cast<int>(key.interpolationType)},
         {"bezierCtrl1",       toJson(key.bezierCtrl1)                },
         {"bezierCtrl2",       toJson(key.bezierCtrl2)                },
@@ -123,6 +125,8 @@ CameraKeyframe keyframeFrom(json const& node) {
     key.pitch             = finiteOr(node, "pitch", key.pitch);
     key.roll              = finiteOr(node, "roll", key.roll);
     key.fov               = finiteOr(node, "fov", key.fov);
+    key.shake             = sanitizedShakeStrength(finiteOr(node, "shake", key.shake));
+    key.shakeFrequency    = sanitizedShakeFrequency(finiteOr(node, "shakeFrequency", key.shakeFrequency));
     key.interpolationType = enumOr(
         node,
         "interpolationType",
@@ -154,13 +158,12 @@ json toJson(CameraEntity const& camera) {
         {"bindingDamping",    camera.bindingDamping        },
         {"keys",              std::move(keys)              }
     };
-    if (camera.shake) {
+    if (camera.kind == CameraTrackKind::Keyframe) {
         result["shake"] = {
-            {"startTick",         camera.shake->startTick        },
-            {"endTick",           camera.shake->endTick          },
-            {"positionAmplitude", camera.shake->positionAmplitude},
-            {"rotationAmplitude", camera.shake->rotationAmplitude},
-            {"frequency",         camera.shake->frequency        }
+            {"positionAmount", camera.shake.positionAmount},
+            {"rotationAmount", camera.shake.rotationAmount},
+            {"rollAmount",     camera.shake.rollAmount    },
+            {"seed",           camera.shake.seed          }
         };
     }
     if (camera.limiter) {
@@ -204,13 +207,14 @@ CameraEntity cameraFrom(json const& node) {
         }
     }
     if (auto const* shake = objectAt(node, "shake")) {
-        camera.shake = CameraShake{
-            intOr(*shake, "startTick", 0),
-            intOr(*shake, "endTick", 0),
-            finiteOr(*shake, "positionAmplitude", 0.0f),
-            finiteOr(*shake, "rotationAmplitude", 0.0f),
-            finiteOr(*shake, "frequency", 1.0f)
-        };
+        ShakeSettings const defaults;
+        camera.shake.positionAmount = finiteOr(*shake, "positionAmount", defaults.positionAmount);
+        camera.shake.rotationAmount = finiteOr(*shake, "rotationAmount", defaults.rotationAmount);
+        camera.shake.rollAmount     = finiteOr(*shake, "rollAmount", defaults.rollAmount);
+        if (auto const seed = shake->find("seed"); seed != shake->end() && seed->is_number_unsigned()) {
+            camera.shake.seed = seed->get<uint32_t>();
+        }
+        camera.shake = camera.shake.sanitized();
     }
     if (auto const* follow = objectAt(node, "follow")) {
         FollowSettings const defaults;
@@ -447,12 +451,15 @@ std::string serializeProject(model::EditorStateExt const& project) {
              {"overrideFog", project.world.overrideFog},
              {"fogStart", project.world.fogStart},
              {"fogEnd", project.world.fogEnd},
+             {"overrideFogColor", project.world.overrideFogColor},
+             {"fogColor", project.world.fogColor},
              {"overrideWeather", project.world.overrideWeather},
              {"weather", static_cast<int>(project.world.weather)},
              {"overrideFov", project.world.overrideFov},
              {"fov", project.world.fov},
              {"overrideGraphics", project.world.overrideGraphics},
              {"graphics", static_cast<int>(project.world.graphics)},
+             {"shaderOptions", project.world.shaderOptions},
              {"overrideGlobalPacks", project.world.overrideGlobalPacks},
              {"globalPacks", std::move(globalPacks)},
              {"overrideColor", project.world.overrideColor},
@@ -537,12 +544,28 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.world.overrideFog  = boolOr(*world, "overrideFog", defaults.overrideFog);
         loaded.world.fogStart     = finiteOr(*world, "fogStart", defaults.fogStart);
         loaded.world.fogEnd       = finiteOr(*world, "fogEnd", defaults.fogEnd);
+        loaded.world.overrideFogColor = boolOr(*world, "overrideFogColor", defaults.overrideFogColor);
+        loaded.world.fogColor         = defaults.fogColor;
+        if (auto const* color = arrayAt(*world, "fogColor"); color && color->size() == 3) {
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                if ((*color)[channel].is_number()) loaded.world.fogColor[channel] = (*color)[channel].get<float>();
+            }
+        }
         loaded.world.overrideWeather  = boolOr(*world, "overrideWeather", defaults.overrideWeather);
         loaded.world.weather          = enumOr(*world, "weather", defaults.weather, 2);
         loaded.world.overrideFov      = boolOr(*world, "overrideFov", defaults.overrideFov);
         loaded.world.fov              = finiteOr(*world, "fov", defaults.fov);
         loaded.world.overrideGraphics    = boolOr(*world, "overrideGraphics", defaults.overrideGraphics);
         loaded.world.graphics            = enumOr(*world, "graphics", defaults.graphics, 2);
+        if (auto const* packs = objectAt(*world, "shaderOptions")) {
+            for (auto const& [pack, options] : packs->items()) {
+                if (!options.is_object()) continue;
+                auto& values = loaded.world.shaderOptions[pack];
+                for (auto const& [name, value] : options.items()) {
+                    if (value.is_string()) values.emplace(name, value.get<std::string>());
+                }
+            }
+        }
         loaded.world.overrideGlobalPacks = boolOr(*world, "overrideGlobalPacks", defaults.overrideGlobalPacks);
         if (auto const* packs = arrayAt(*world, "globalPacks")) {
             for (auto const& pack : *packs) {
