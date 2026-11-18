@@ -41,6 +41,7 @@
 #include "mc/deps/ecs/strict/StrictEntityContext.h"
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/IntTag.h"
+#include "mc/deps/shared_types/legacy/LevelEvent.h"
 #include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
@@ -75,6 +76,7 @@
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
+#include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
@@ -147,6 +149,7 @@
 #include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
+#include "mc/world/level/Weather.h"
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/BlockRenderLayer.h"
 #include "mc/world/level/block/BlockType.h"
@@ -941,6 +944,8 @@ void ReplaySession::clearReplayData() {
     mTimeOfDayOverride.reset();
     mFreezeTimeOverride = true;
     mHideClouds         = false;
+    mWeatherOverride.reset();
+    mRecordedWeather.reset();
     {
         std::lock_guard lock(mReplayItemRegistryMutex);
         mReplayItemRegistryPayload.clear();
@@ -1408,6 +1413,12 @@ void ReplaySession::refreshReplayPlayerRoster() {
 
     auto const dimension = mReplayPlayer->getDimensionId();
     auto const actors    = mReplayPlayer->getLevel().getRuntimeActorList();
+    // A remote player's actor carries no UUID on the client; its AddPlayer named it, keyed by unique ID.
+    std::unordered_map<int64_t, std::string> uuidById;
+    {
+        std::lock_guard lock(mReplayPlayersMutex);
+        for (auto const& [uuid, record] : mReplayPlayers) uuidById.emplace(record.id.rawID, uuid);
+    }
     struct LivePlayer {
         ActorUniqueID id;
         std::string   name;
@@ -1419,7 +1430,12 @@ void ReplaySession::refreshReplayPlayerRoster() {
         if (!actor || actor == mReplayPlayer || !actor->isPlayer()) continue;
         if (actor->getDimensionId() != dimension) continue;
         auto const* player = static_cast<Player const*>(actor);
-        std::string uuid   = player->getUuid().asString();
+        std::string uuid;
+        if (auto const& own = player->getUuid(); own != mce::UUID{}) {
+            uuid = own.asString();
+        } else if (auto const listed = uuidById.find(actor->getOrCreateUniqueID().rawID); listed != uuidById.end()) {
+            uuid = listed->second;
+        }
         if (uuid.empty()) continue;
         bool const recorder = mRecordedLocalPlayerId && actor->getOrCreateUniqueID() == *mRecordedLocalPlayerId;
         live.insert_or_assign(
@@ -1900,7 +1916,7 @@ void ReplaySession::rebindReplaySubject() {
     if (actor->isPlayer()) {
         auto&       subject = static_cast<Player&>(*actor);
         auto const& entries = subject.getLevel().getPlayerList();
-        auto const  entry   = entries.find(subject.getUuid());
+        auto const  entry   = entries.find(uuid.empty() ? subject.getUuid() : mce::UUID::fromString(uuid));
         if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
             applyObserverSkin(*entry->second.mSkin);
             getLogger().debug("replay observer skin applied name={} uuid={}", name, uuid);
@@ -2061,6 +2077,7 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
 
 void ReplaySession::enforceReplayWorldTime() {
     if (!mActive || !mReplayPlayer) return;
+    applyWeatherOverride();
     auto const time = effectiveReplayTime();
     if (!time) return;
     auto& level = mReplayPlayer->getLevel();
@@ -2098,6 +2115,40 @@ void ReplaySession::restoreClouds() {
     auto const saved = std::exchange(mSavedRenderClouds, std::nullopt);
     if (!saved) return;
     if (auto const option = renderCloudsOption()) option->set(*saved, false);
+}
+
+void ReplaySession::applyWeatherOverride() {
+    if (!mReplayPlayer) return;
+    auto* weather = mReplayPlayer->getDimension().mWeather.get();
+    if (!weather) return;
+    if (!mWeatherOverride) {
+        // The recording's weather comes back, fading in as the game's own weather changes do.
+        if (auto const recorded = std::exchange(mRecordedWeather, std::nullopt)) {
+            weather->mTargetRainLevel      = recorded->first;
+            weather->mTargetLightningLevel = recorded->second;
+        }
+        return;
+    }
+    if (!mRecordedWeather) {
+        mRecordedWeather = std::pair<float, float>{weather->mTargetRainLevel, weather->mTargetLightningLevel};
+    }
+    float const rain      = *mWeatherOverride == state::editing::model::WeatherStyle::Clear ? 0.0f : 1.0f;
+    float const lightning = *mWeatherOverride == state::editing::model::WeatherStyle::Thunder ? 1.0f : 0.0f;
+    // Current, previous and target together: no fade, so a paused preview shows the change at once.
+    weather->mOldRainLevel         = rain;
+    weather->mRainLevel            = rain;
+    weather->mTargetRainLevel      = rain;
+    weather->mOldLightningLevel    = lightning;
+    weather->mLightningLevel       = lightning;
+    weather->mTargetLightningLevel = lightning;
+}
+
+void ReplaySession::noteRecordedWeather() {
+    if (!mWeatherOverride || !mReplayPlayer) return;
+    auto* weather = mReplayPlayer->getDimension().mWeather.get();
+    if (!weather) return;
+    mRecordedWeather = std::pair<float, float>{weather->mTargetRainLevel, weather->mTargetLightningLevel};
+    applyWeatherOverride();
 }
 
 void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& rotation) {
@@ -2717,6 +2768,7 @@ void ReplaySession::tick() {
         forceFirstPersonCamera();
         if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
         applyCloudOverride();
+        applyWeatherOverride();
         updateScreenPreview();
         syncFollowedPlayerHud();
 
@@ -4932,6 +4984,7 @@ void ReplaySession::handleNextTick() {
     integration::pushReplayClock(mCurrentTick, false);
     if (mReplayTime) ++*mReplayTime;
     if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
+    applyWeatherOverride();
     updateReplaySubjectPosture(false);
 }
 
@@ -5980,7 +6033,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             }
             auto* addEntry = std::get_if<PlayerListPacketPayload::AddEntry>(&entry);
             if (!addEntry) continue;
-            if (std::string uuid = addEntry->mUUID->asString(); !uuid.empty()) {
+            if (std::string uuid = addEntry->mUUID->asString(); *addEntry->mUUID != mce::UUID{}) {
                 bool const recorder = mRecordedLocalPlayerId && addEntry->mId->rawID == mRecordedLocalPlayerId->rawID;
                 noteReplayIdentity(std::move(uuid), *addEntry->mName, ActorUniqueID{addEntry->mId->rawID}, recorder);
             }
@@ -6079,6 +6132,18 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             if (entry != entries.end() && !entry->second.mName->empty()) {
                 *addPlayer.mName = *entry->second.mName;
             }
+        }
+        // Recordings before the recorder resolved remote players' UUIDs wrote them nil, so every remote player
+        // collided with the first and only one appeared. The snapshot's player list, applied before its players,
+        // still names each of them by unique ID.
+        if (!recordedLocalPlayer && *addPlayer.mUuid == mce::UUID{} && mReplayPlayer) {
+            auto const  id      = addPlayer.mAbilitiesData->mTargetPlayer->rawID;
+            auto const& entries = mReplayPlayer->getLevel().getPlayerList();
+            auto const  listed  = std::ranges::find_if(entries, [id](auto const& entry) {
+                return entry.first != mce::UUID{} && entry.second.mId->rawID == id;
+            });
+            addPlayer.mUuid =
+                listed != entries.end() ? listed->first : mce::UUID::fromStringHash(std::to_string(id));
         }
         if (addPlayer.mPlayerGameType == GameType::Default || addPlayer.mPlayerGameType == GameType::Undefined) {
             LayeredAbilities abilities;
@@ -6180,6 +6245,15 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 
+    if (packetId == MinecraftPacketIds::LevelEvent) {
+        using SharedTypes::Legacy::LevelEvent;
+        auto const event = static_cast<LevelEvent>(static_cast<LevelEventPacket const&>(*packet).mEventId);
+        if (event == LevelEvent::StartRaining || event == LevelEvent::StopRaining
+            || event == LevelEvent::StartThunderstorm || event == LevelEvent::StopThunderstorm) {
+            noteRecordedWeather();
+        }
+    }
+
     if (mReplayPlayer) {
         std::string const subject = [&]() -> std::string {
             std::string const choice = replaySubjectChoice();
@@ -6241,7 +6315,9 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         if (recordedLocalPlayer) mRecordedLocalPlayerId = entityId;
         std::string uuid = addPlayer.mUuid->asString();
         std::string name = *addPlayer.mName;
-        if (!uuid.empty()) rememberReplayPlayer(std::move(uuid), std::move(name), entityId, recordedLocalPlayer);
+        if (*addPlayer.mUuid != mce::UUID{}) {
+            rememberReplayPlayer(std::move(uuid), std::move(name), entityId, recordedLocalPlayer);
+        }
         // A player who never moves again has no movement action to seed the pose history a first-person view reads.
         auto& level = mReplayPlayer->getLevel();
         if (auto* actor = level.fetchEntity(entityId, false)) {

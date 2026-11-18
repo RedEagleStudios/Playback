@@ -1231,6 +1231,56 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
 
     property::separator();
     if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldOverrideWeather"_tr() + "##set-override-weather").c_str(),
+            &world.overrideWeather
+        ))
+        commit(world);
+    ImGui::BeginDisabled(!world.overrideWeather);
+    // Indexed by WeatherStyle.
+    std::array const weatherStyles{
+        "playback.refactorEditor.inspector.worldWeatherClear"_tr(),
+        "playback.refactorEditor.inspector.worldWeatherRain"_tr(),
+        "playback.refactorEditor.inspector.worldWeatherThunder"_tr(),
+    };
+    auto const currentWeather = static_cast<std::size_t>(world.weather);
+    ImGui::SetNextItemWidth(-1.0f);
+    if (widgets::beginCombo("##set-weather", weatherStyles[currentWeather].c_str())) {
+        for (std::size_t index = 0; index < weatherStyles.size(); ++index) {
+            if (ImGui::Selectable(weatherStyles[index].c_str(), index == currentWeather)) {
+                world.weather = static_cast<editing::model::WeatherStyle>(index);
+                commit(world);
+            }
+        }
+        widgets::endCombo();
+    }
+    widgets::itemTooltip("playback.refactorEditor.inspector.worldWeatherHint"_tr().c_str());
+    ImGui::EndDisabled();
+
+    property::separator();
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.inspector.worldOverrideFov"_tr() + "##set-override-fov").c_str(),
+            &world.overrideFov
+        ))
+        commit(world);
+    widgets::itemTooltip("playback.refactorEditor.inspector.worldFovHint"_tr().c_str());
+    ImGui::BeginDisabled(!world.overrideFov);
+    float fov = world.fov;
+    ImGui::SetNextItemWidth(-1.0f);
+    changed = ImGui::SliderFloat(
+        "##set-fov",
+        &fov,
+        WorldSettings::MinFov,
+        WorldSettings::MaxFov,
+        "%.0f°",
+        ImGuiSliderFlags_AlwaysClamp
+    );
+    edited     = world;
+    edited.fov = fov;
+    drag(changed, edited);
+    ImGui::EndDisabled();
+
+    property::separator();
+    if (ImGui::Checkbox(
             ("playback.refactorEditor.inspector.worldOverrideGraphics"_tr() + "##set-override-graphics").c_str(),
             &world.overrideGraphics
         ))

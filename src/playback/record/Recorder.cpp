@@ -1878,6 +1878,19 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
             return true;
         });
 
+        // A remote player's actor carries no UUID on the recording client, so the native AddPlayer and player-list
+        // constructors write a nil one and every remote player collapses into one identity on playback. The level's
+        // player list still keys each of them by the real UUID.
+        std::unordered_map<int64_t, mce::UUID> listedUuids;
+        for (auto const& [uuid, entry] : level.getPlayerList()) listedUuids.emplace(entry.mId->rawID, uuid);
+        auto const uuidOf = [&listedUuids](Player const& player) -> mce::UUID {
+            if (auto const& own = player.getUuid(); own != mce::UUID{}) return own;
+            auto const uniqueId = player.getOrCreateUniqueID().rawID;
+            if (auto const listed = listedUuids.find(uniqueId); listed != listedUuids.end()) return listed->second;
+            // Unlisted: still one stable identity per player across snapshots.
+            return mce::UUID::fromStringHash(std::to_string(uniqueId));
+        };
+
         auto const                              playerUniqueId = finalPlayer->getOrCreateUniqueID();
         auto const                              playerUuid     = finalPlayer->getUuid().asString();
         std::vector<PlayerListEntry>            identity;
@@ -1888,7 +1901,7 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
         std::unordered_map<std::string, Player const*> playersByUuid;
         playersByUuid.emplace(playerUuid, finalPlayer);
         level.forEachPlayer([&](Player& player) {
-            playersByUuid.emplace(player.getUuid().asString(), &player);
+            playersByUuid.emplace(uuidOf(player).asString(), &player);
             return true;
         });
         auto const upsertIdentity = [&](PlayerListEntry entry) {
@@ -1927,7 +1940,11 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
         };
         for (auto const& listed : level.getPlayerList()) upsertIdentity(PlayerListEntry(listed.second));
         upsertIdentity(PlayerListEntry(*finalPlayer));
-        for (auto const* player : spawnPlayers) upsertIdentity(PlayerListEntry(*player));
+        for (auto const* player : spawnPlayers) {
+            PlayerListEntry entry(*player);
+            entry.mUUID = uuidOf(*player);
+            upsertIdentity(std::move(entry));
+        }
 
         if (!identity.empty()) {
             auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::PlayerList);
@@ -2028,6 +2045,7 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
         }
         for (auto* player : spawnPlayers) {
             AddPlayerPacket packet(*player);
+            packet.mUuid = uuidOf(*player);
             serializedPlayers.insert(player->getOrCreateUniqueID().rawID);
             appendEntityPacket(packet);
             if (!appendActorState(*player, player->getRuntimeID())) return SnapshotCaptureResult::Failed;

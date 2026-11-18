@@ -60,6 +60,14 @@ std::array<std::atomic_bool, 2> gApplicationFailureLogged{};
 std::array<std::atomic_bool, 2> gFinalViewFailureLogged{};
 std::array<std::atomic_bool, 2> gCameraEcsFailureLogged{};
 
+// The project's FOV for every view, in degrees (setFovOverride); NaN while views keep their own.
+std::atomic<float> gFovOverride{std::numeric_limits<float>::quiet_NaN()};
+
+std::optional<float> fovOverride() noexcept {
+    float const fov = gFovOverride.load(std::memory_order_acquire);
+    return std::isnan(fov) ? std::nullopt : std::optional<float>{fov};
+}
+
 thread_local std::optional<keyframe::CameraRenderState> gParkedObserverCamera;
 // The recorded player's eye pose for the frame being drawn; the camera components carry it into the vanilla view.
 thread_local std::optional<keyframe::CameraRenderState> gFollowCamera;
@@ -317,7 +325,7 @@ bool applyCameraEcsPose(keyframe::CameraRenderState const& state, bool applyFov,
     auto const position     = ::glm::vec3{state.x, state.y, state.z};
     auto const basis        = basisFromState(state);
     auto const modelView    = viewMatrix(position, basis);
-    auto const componentFov = state.fov * RadiansPerDegree;
+    auto const componentFov = fovOverride().value_or(state.fov) * RadiansPerDegree;
 
     struct AppliedComponent {
         MinecraftCamera::CameraComponent* component{};
@@ -731,10 +739,11 @@ LL_TYPE_INSTANCE_HOOK(
     bool  enableVariableFov
 ) {
     float const native = origin(amount, enableVariableFov);
-    // The followed player's recorded FOV carries the spyglass zoom the observer never has.
-    if (gFollowCamera) return enableVariableFov ? gFollowCamera->fov : native;
-    // The hand projection takes getFov(false), a fixed 70 in vanilla; the timeline FOV would shrink the hands.
+    // The hand projection takes getFov(false), a fixed 70 in vanilla; a view FOV would shrink the hands.
     if (!enableVariableFov) return native;
+    if (auto const fov = fovOverride()) return *fov;
+    // The followed player's recorded FOV carries the spyglass zoom the observer never has.
+    if (gFollowCamera) return gFollowCamera->fov;
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
     if (gPausedFov && observerStillParked()) return *gPausedFov;
@@ -752,6 +761,7 @@ LL_TYPE_INSTANCE_HOOK(
     auto const native = origin();
     // Keep "no FOV available" intact so callers never see a camera the game does not have.
     if (!native) return native;
+    if (auto const fov = fovOverride()) return ::std::optional<float>{*fov * RadiansPerDegree};
 
     if (gFollowCamera) return ::std::optional<float>{gFollowCamera->fov * RadiansPerDegree};
     auto const context = keyframe::currentCameraTimelineRenderContext();
@@ -1033,6 +1043,10 @@ std::optional<RenderCameraProjection> currentRenderCameraProjection() {
     if (!gInstalled.load(std::memory_order_acquire)) return std::nullopt;
     // Prefer the projection tagged to the presented frame; otherwise the latest published one is at most a frame old.
     return gSubmittedCameraProjection ? gSubmittedCameraProjection : gRenderCameraProjection;
+}
+
+void setFovOverride(std::optional<float> degrees) {
+    gFovOverride.store(degrees.value_or(std::numeric_limits<float>::quiet_NaN()), std::memory_order_release);
 }
 
 void useSubmittedCameraProjection(bgfx::Frame const*) {

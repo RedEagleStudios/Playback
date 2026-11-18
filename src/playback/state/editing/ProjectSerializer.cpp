@@ -447,6 +447,10 @@ std::string serializeProject(model::EditorStateExt const& project) {
              {"overrideFog", project.world.overrideFog},
              {"fogStart", project.world.fogStart},
              {"fogEnd", project.world.fogEnd},
+             {"overrideWeather", project.world.overrideWeather},
+             {"weather", static_cast<int>(project.world.weather)},
+             {"overrideFov", project.world.overrideFov},
+             {"fov", project.world.fov},
              {"overrideGraphics", project.world.overrideGraphics},
              {"graphics", static_cast<int>(project.world.graphics)},
              {"overrideGlobalPacks", project.world.overrideGlobalPacks},
@@ -533,6 +537,10 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.world.overrideFog  = boolOr(*world, "overrideFog", defaults.overrideFog);
         loaded.world.fogStart     = finiteOr(*world, "fogStart", defaults.fogStart);
         loaded.world.fogEnd       = finiteOr(*world, "fogEnd", defaults.fogEnd);
+        loaded.world.overrideWeather  = boolOr(*world, "overrideWeather", defaults.overrideWeather);
+        loaded.world.weather          = enumOr(*world, "weather", defaults.weather, 2);
+        loaded.world.overrideFov      = boolOr(*world, "overrideFov", defaults.overrideFov);
+        loaded.world.fov              = finiteOr(*world, "fov", defaults.fov);
         loaded.world.overrideGraphics    = boolOr(*world, "overrideGraphics", defaults.overrideGraphics);
         loaded.world.graphics            = enumOr(*world, "graphics", defaults.graphics, 2);
         loaded.world.overrideGlobalPacks = boolOr(*world, "overrideGlobalPacks", defaults.overrideGlobalPacks);

@@ -271,6 +271,9 @@ private:
     bool                                        mFreezeTimeOverride{true};
     bool                                        mHideClouds{};
     std::optional<bool>                         mSavedRenderClouds;
+    // The project's weather (setWeatherOverride), and the recording's rain and lightning targets while overridden.
+    std::optional<state::editing::model::WeatherStyle> mWeatherOverride;
+    std::optional<std::pair<float, float>>             mRecordedWeather;
     // The project's graphics mode (setGraphicsOverride) and global resource packs (start).
     ClientVisualOverrides                       mVisualOverrides;
     std::optional<DimensionType>                mPendingReplayDimension;
@@ -599,6 +602,11 @@ private:
     [[nodiscard]] std::optional<int> effectiveReplayTime() const;
     void                             applyCloudOverride();
     void                             restoreClouds();
+    // Holds the replay dimension's weather at the project's override; with none, hands back the recording's.
+    void applyWeatherOverride();
+    // A recorded weather event just moved the client's weather: that is the recording's now, kept for when the
+    // override goes off.
+    void noteRecordedWeather();
     void rebindReplaySubject();
     void refreshReplaySubjectBinding();
     // Points the follow view at the preview camera track under the playhead. Export drives its own shots.
@@ -667,6 +675,8 @@ public:
     void setGraphicsOverride(std::optional<state::editing::model::GraphicsStyle> graphics) {
         mProjectGraphics = graphics;
     }
+    // The project's weather; nullopt plays the recorded weather.
+    void setWeatherOverride(std::optional<state::editing::model::WeatherStyle> weather) { mWeatherOverride = weather; }
     // The viewport's Flat view: Simple graphics and full brightness while editing. Exports clear it. Any thread.
     void setFlatPreview(bool flat) noexcept { mFlatPreview.store(flat, std::memory_order_release); }
     [[nodiscard]] std::shared_ptr<std::vector<state::editing::model::GlobalPack> const> installedGlobalPacks() const {

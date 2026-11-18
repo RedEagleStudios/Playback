@@ -13,7 +13,7 @@ namespace playback::integration {
 // The shader packs in Arke's shaderpacks folder (archives and folders), sorted by name.
 [[nodiscard]] std::vector<std::string> arkeShaderPacks();
 
-// The pack Arke's own setting runs, or empty when Arke is off or absent.
+// The pack Arke's own setting names, also while Arke is off; empty when Arke is absent or names none.
 [[nodiscard]] std::string arkeConfiguredShader();
 
 // Runs `pack`, or turns Arke off for vanilla rendering when it is empty. Nothing is reloaded when that is already

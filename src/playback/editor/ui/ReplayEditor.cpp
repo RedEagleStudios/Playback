@@ -134,8 +134,11 @@ void ReplayEditor::setRenderShaderPack(std::string pack) {
     saveLayoutPreferences();
 }
 
-void ReplayEditor::syncViewShading(bool inReplay, bool exportLook) {
-    auto& session = replay::ReplaySession::getInstance();
+void ReplayEditor::syncViewShading(playback::state::EditorState const& state) {
+    bool const exportActive = exporting::isExportActive(state.exportStatus.state);
+    bool const inReplay     = state.replayVisible || exportActive;
+    bool const exportLook   = exportActive || mMenuBar.isExportDialogOpen();
+    auto&      session      = replay::ReplaySession::getInstance();
     if (!inReplay) {
         if (!mViewShadingLive) return;
         mViewShadingLive = false;
@@ -370,7 +373,6 @@ void ReplayEditor::requestKeyframeSelection(std::string trackId, int tick) {
 
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
-    syncViewShading(state.replayVisible || exportActive, exportActive || mMenuBar.isExportDialogOpen());
     if (!state.editorVisible && !exportActive) {
         if (!mActiveReplayPath.empty()) {
             mTimelineViewPreferences.insert_or_assign(

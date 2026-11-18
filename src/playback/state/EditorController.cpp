@@ -1,6 +1,7 @@
 ﻿#include "EditorController.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/editor/graphics/ColorGrading.h"
 #include "playback/editor/graphics/FogOverride.h"
 #include "playback/io/ReplayLibrary.h"
@@ -509,6 +510,7 @@ void EditorController::publishState(bool hudVisible) {
         mActiveReplayPath.clear();
         mWorldPreview.reset();
         editor::graphics::setFogOverride(std::nullopt);
+        editor::graphics::setFovOverride(std::nullopt);
         editor::graphics::setColorGrading(std::nullopt);
     }
     ensureProject(state.totalTicks, mActiveReplayPath);
@@ -527,6 +529,8 @@ void EditorController::publishState(bool hudVisible) {
             world.overrideFog ? std::optional<editor::graphics::FogOverride>{{world.fogStart, world.fogEnd}}
                               : std::nullopt
         );
+        editor::graphics::setFovOverride(world.overrideFov ? std::optional{world.fov} : std::nullopt);
+        session.setWeatherOverride(world.overrideWeather ? std::optional{world.weather} : std::nullopt);
         editor::graphics::setColorGrading(
             world.overrideColor
                 ? std::optional<editor::graphics::ColorGrading>{{world.exposure, world.temperature, world.tint}}

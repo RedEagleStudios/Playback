@@ -96,6 +96,11 @@ public:
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
     [[nodiscard]] Rect        viewportOverlayRect() const { return mViewportPanel.overlayRect(); }
 
+    // Every Present, whether or not the editor draws: puts the viewport's shading in place while a replay is open, and
+    // gives Arke the user's own setting back once it closes. While the export dialog is open or an export runs, the
+    // viewport shows the export's look (project graphics, Rendered pack). Render thread.
+    void syncViewShading(playback::state::EditorState const& state);
+
 private:
     ReplayEditor() = default;
 
@@ -151,9 +156,6 @@ private:
     void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
     void updateExitHold();
-    // Puts the viewport's shading in place; while the export dialog is open or an export runs, the viewport shows the
-    // export's look (project graphics, Rendered pack).
-    void syncViewShading(bool inReplay, bool exportLook);
 
     friend class EditMode;
     friend class RenderMode;

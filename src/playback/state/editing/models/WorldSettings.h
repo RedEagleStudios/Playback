@@ -15,6 +15,13 @@ enum class GraphicsStyle : int {
     VibrantVisuals = 2,
 };
 
+// The weather a project can force on the replay world.
+enum class WeatherStyle : int {
+    Clear   = 0,
+    Rain    = 1,
+    Thunder = 2,
+};
+
 // A resource pack by identity. The name is only shown, and kept for packs that are not installed here.
 struct GlobalPack {
     std::string id;
@@ -42,6 +49,14 @@ struct WorldSettings {
     // past the start: with no distance to fade over there is no fog at all.
     float fogStart{0.92f};
     float fogEnd{1.0f};
+    // Off: the recorded weather plays back. Rain and Thunder fall wherever the biome has precipitation; Thunder also
+    // darkens the sky. Lightning bolts are recorded entities and still strike as recorded.
+    bool         overrideWeather{};
+    WeatherStyle weather{WeatherStyle::Clear};
+    // Off: every view keeps its own field of view (camera keys, the followed player's, the free camera's). On: all of
+    // them take fov, in degrees, in preview and export alike. The first-person hand keeps the game's own.
+    bool  overrideFov{};
+    float fov{70.0f};
     // Off: the viewer's own graphics mode.
     bool          overrideGraphics{};
     GraphicsStyle graphics{GraphicsStyle::Fancy};
@@ -62,6 +77,9 @@ struct WorldSettings {
     static constexpr float MaxFogDistance = 4.0f;
     static constexpr float MinFogRange    = 0.01f;
 
+    static constexpr float MinFov = 10.0f;
+    static constexpr float MaxFov = 150.0f;
+
     // The settings brought into range, as the UI and project files may hold anything.
     [[nodiscard]] WorldSettings sanitized() const {
         auto const unit = [](float value, float low, float high, float fallback) {
@@ -75,9 +93,12 @@ struct WorldSettings {
         out.exposure    = unit(exposure, -MaxExposure, MaxExposure, 0.0f);
         out.temperature = unit(temperature, -1.0f, 1.0f, 0.0f);
         out.tint        = unit(tint, -1.0f, 1.0f, 0.0f);
+        out.fov         = unit(fov, MinFov, MaxFov, 70.0f);
         if (graphics != GraphicsStyle::Simple && graphics != GraphicsStyle::Fancy
             && graphics != GraphicsStyle::VibrantVisuals)
             out.graphics = GraphicsStyle::Fancy;
+        if (weather != WeatherStyle::Clear && weather != WeatherStyle::Rain && weather != WeatherStyle::Thunder)
+            out.weather = WeatherStyle::Clear;
         return out;
     }
 

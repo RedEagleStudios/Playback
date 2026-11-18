@@ -141,8 +141,8 @@ std::string arkeConfiguredShader() {
     if (!directory) return {};
     auto const config = readConfig(*directory / "config.json");
     if (!config) return {};
-    auto const setting = settingIn(*config);
-    return setting.enabled ? setting.shaderpack : std::string{};
+    // Arke keeps the pack it last ran while it is off, which is the user's pack all the same.
+    return settingIn(*config).shaderpack;
 }
 
 } // namespace playback::integration

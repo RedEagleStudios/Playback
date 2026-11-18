@@ -49,6 +49,10 @@ json toJson(model::WorldSettings const& world) {
         {"overrideFog",         world.overrideFog                    },
         {"fogStart",            world.fogStart                       },
         {"fogEnd",              world.fogEnd                         },
+        {"overrideWeather",     world.overrideWeather                },
+        {"weather",             magic_enum::enum_name(world.weather) },
+        {"overrideFov",         world.overrideFov                    },
+        {"fov",                 world.fov                            },
         {"overrideGraphics",    world.overrideGraphics               },
         {"graphics",            magic_enum::enum_name(world.graphics)},
         {"overrideGlobalPacks", world.overrideGlobalPacks            },
@@ -196,6 +200,14 @@ model::WorldSettings worldFrom(json const& node, model::WorldSettings world) {
     world.overrideFog      = node.value("overrideFog", world.overrideFog);
     world.fogStart         = node.value("fogStart", world.fogStart);
     world.fogEnd           = node.value("fogEnd", world.fogEnd);
+    world.overrideWeather  = node.value("overrideWeather", world.overrideWeather);
+    if (auto const weather = node.find("weather"); weather != node.end() && weather->is_string()) {
+        if (auto const parsed = magic_enum::enum_cast<model::WeatherStyle>(weather->get<std::string>())) {
+            world.weather = *parsed;
+        }
+    }
+    world.overrideFov      = node.value("overrideFov", world.overrideFov);
+    world.fov              = node.value("fov", world.fov);
     world.overrideGraphics = node.value("overrideGraphics", world.overrideGraphics);
     if (auto const graphics = node.find("graphics"); graphics != node.end() && graphics->is_string()) {
         if (auto const parsed = magic_enum::enum_cast<model::GraphicsStyle>(graphics->get<std::string>())) {

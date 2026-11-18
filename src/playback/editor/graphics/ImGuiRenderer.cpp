@@ -1496,6 +1496,8 @@ bool ImGuiRenderer::renderInternal(
         p.recordDialogActive = recordDialog;
         input::setUiVisible(uiActive);
         if (!forceExportOverlay || !exportOverlay) p.resetExportSurface();
+        // Also when the editor is not drawn, so the user's own shader setting comes back as the replay closes.
+        ui::ReplayEditor::getInstance().syncViewShading(state);
     }
 
     auto const browserRevision = allowUi && state.browser.snapshot ? state.browser.snapshot->revision : 0;
