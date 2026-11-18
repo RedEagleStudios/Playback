@@ -2,6 +2,7 @@
 
 #include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/IEditCommand.h"
+#include "playback/state/editing/models/PoseClip.h"
 #include "playback/state/editing/models/SubActor.h"
 #include "playback/state/editing/models/WorldSettings.h"
 
@@ -69,6 +70,7 @@ public:
     static std::unique_ptr<model::IEditCommand> createRenameMarker(const std::string& id, const std::string& label);
 
     static std::unique_ptr<model::IEditCommand> createSetWorldSettings(model::WorldSettings const& settings);
+    static std::unique_ptr<model::IEditCommand> createSetPoseClips(std::vector<model::PoseClip> clips);
 };
 
 } // namespace playback::state::editing::command

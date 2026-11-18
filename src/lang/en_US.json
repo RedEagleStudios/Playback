@@ -594,7 +594,17 @@
                 "worldTemperature": "Temperature",
                 "worldTint": "Tint",
                 "worldColorHint": "Exposure in stops. Temperature runs from cool (blue) to warm (orange), tint from green to magenta; both keep the brightness. Ctrl+click a slider to type a value.",
-                "worldHint": "Saved in the project. Applies to the preview and to exported video."
+                "worldHint": "Saved in the project. Applies to the preview and to exported video.",
+                "poses": "Poses",
+                "posePlayer": "Player",
+                "poseAnimation": "Animation",
+                "poseAnimationHint": "Any player animation the loaded packs define, as /playanimation takes it. Press Enter to apply.",
+                "poseStartHere": "Start at playhead",
+                "poseEndHere": "End at playhead",
+                "poseHideItems": "Empty hands",
+                "poseDelete": "Delete pose",
+                "poseAdd": "Add pose at playhead",
+                "posesHint": "Plays the animation on the player from its start tick until its end tick; Empty hands hides what they hold meanwhile. Saved in the project; shown in the preview and in exported video."
             },
             "defaults": {
                 "camera": "Camera {}",

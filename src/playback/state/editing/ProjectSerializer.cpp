@@ -408,6 +408,18 @@ std::string serializeProject(model::EditorStateExt const& project) {
     auto markers = json::array();
     for (auto const& marker : project.markers) markers.push_back(toJson(marker));
 
+    auto poses = json::array();
+    for (auto const& pose : project.poses) {
+        poses.push_back({
+            {"id",        pose.id       },
+            {"subject",   pose.subject  },
+            {"animation", pose.animation},
+            {"startTick", pose.startTick},
+            {"endTick",   pose.endTick  },
+            {"hideItems", pose.hideItems},
+        });
+    }
+
     auto videoTracks = json::array();
     for (auto const& track : project.videoTracks) videoTracks.push_back(toJson(track));
 
@@ -440,6 +452,7 @@ std::string serializeProject(model::EditorStateExt const& project) {
              {"subActors", std::move(subActors)}
          }                                                             },
         {"markers",                   std::move(markers)               },
+        {"poses",                     std::move(poses)                 },
         {"videoTracks",               std::move(videoTracks)           },
         {"transitions",               std::move(transitions)           },
         {"world",
@@ -523,6 +536,19 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         for (auto const& entry : *markers) {
             if (!entry.is_object()) continue;
             loaded.markers.push_back({stringOr(entry, "id"), stringOr(entry, "label"), intOr(entry, "tick", 0)});
+        }
+    }
+    if (auto const* poses = arrayAt(document, "poses")) {
+        for (auto const& entry : *poses) {
+            if (!entry.is_object()) continue;
+            model::PoseClip pose;
+            pose.id        = stringOr(entry, "id");
+            pose.subject   = stringOr(entry, "subject");
+            pose.animation = stringOr(entry, "animation");
+            pose.startTick = intOr(entry, "startTick", 0);
+            pose.endTick   = intOr(entry, "endTick", 0);
+            pose.hideItems = boolOr(entry, "hideItems", true);
+            loaded.poses.push_back(pose.sanitized());
         }
     }
     if (auto const* tracks = arrayAt(document, "videoTracks")) {

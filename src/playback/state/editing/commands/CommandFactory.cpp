@@ -2,6 +2,7 @@
 
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
+#include "playback/state/editing/commands/PoseCommands.h"
 #include "playback/state/editing/commands/SubActorCommands.h"
 #include "playback/state/editing/commands/WorldActorCommands.h"
 #include "playback/state/editing/commands/WorldCommands.h"
@@ -138,6 +139,10 @@ CommandFactory::createRenameMarker(const std::string& id, const std::string& lab
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetWorldSettings(model::WorldSettings const& settings) {
     return std::make_unique<SetWorldSettings>(settings);
+}
+
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetPoseClips(std::vector<model::PoseClip> clips) {
+    return std::make_unique<SetPoseClips>(std::move(clips));
 }
 
 } // namespace playback::state::editing::command

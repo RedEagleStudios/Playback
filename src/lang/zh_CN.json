@@ -594,7 +594,17 @@
                 "worldTemperature": "色温",
                 "worldTint": "色调",
                 "worldColorHint": "曝光以档为单位。色温从冷（蓝）到暖（橙），色调从绿到品红；两者都保持亮度不变。按住 Ctrl 点击滑块可输入数值。",
-                "worldHint": "保存在项目中。同时作用于预览和导出的视频。"
+                "worldHint": "保存在项目中。同时作用于预览和导出的视频。",
+                "poses": "姿势",
+                "posePlayer": "玩家",
+                "poseAnimation": "动画",
+                "poseAnimationHint": "已加载资源包中定义的任意玩家动画，与 /playanimation 的写法相同。按回车应用。",
+                "poseStartHere": "从播放头开始",
+                "poseEndHere": "在播放头结束",
+                "poseHideItems": "空手",
+                "poseDelete": "删除姿势",
+                "poseAdd": "在播放头添加姿势",
+                "posesHint": "从开始刻到结束刻在该玩家身上播放动画；勾选空手时隐藏其手持物品。保存在项目中，同时作用于预览和导出的视频。"
             },
             "defaults": {
                 "camera": "相机 {}",

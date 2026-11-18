@@ -239,6 +239,19 @@ struct FollowedHudMirror {
     bool forceWrite{};
 };
 
+// What each playing pose clip has done to its player, by clip id.
+struct PoseClipRuntime {
+    struct Playing {
+        ::ActorUniqueID actor{};
+        std::string     animation;
+        int             attempts{};
+        // What the recording put in the player's hands while the clip kept them empty, given back when it ends.
+        std::optional<::ItemStack> mainhand;
+        std::optional<::ItemStack> offhand;
+    };
+    std::unordered_map<std::string, Playing> playing;
+};
+
 namespace playback::replay {
 using namespace playback::action;
 using namespace playback::packet;
@@ -958,6 +971,7 @@ void ReplaySession::clearReplayData() {
     mHideClouds         = false;
     mWeatherOverride.reset();
     mRecordedWeather.reset();
+    endPoseClips(true);
     {
         std::lock_guard lock(mReplayItemRegistryMutex);
         mReplayItemRegistryPayload.clear();
@@ -2710,6 +2724,99 @@ void ReplaySession::restartSeekAnimationClip(SeekAnimationClip const& clip) {
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 }
 
+void ReplaySession::applyPoseClips() {
+    // Frames the renderer needs before an actor takes a clip; until it holds the pose it is sent again this often.
+    constexpr int ResendAttempt = 10;
+    if (!mReplayPlayer || !mNetworkHandler) return;
+    if (!mPoseRuntime) mPoseRuntime = std::make_unique<PoseClipRuntime>();
+    auto& level = mReplayPlayer->getLevel();
+
+    std::unordered_map<std::string, ActorUniqueID> ids;
+    {
+        std::lock_guard lock(mReplayPlayersMutex);
+        for (auto const& [uuid, record] : mReplayPlayers) ids.emplace(uuid, record.id);
+    }
+    // The pose plays as `/playanimation` would, on the runtime controller; sending it again with a stop expression
+    // that is already true blends it out.
+    auto const send = [&](Actor& actor, std::string const& animation, bool stop) {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::TriggerAnimation);
+        if (!packet || !packet->mHandler) return;
+        auto& animate           = static_cast<AnimateEntityPacket&>(*packet);
+        animate.mRuntimeIds     = std::vector{actor.getRuntimeID()};
+        animate.mAnimation      = animation;
+        animate.mStopExpression = stop ? "1" : "0";
+        animate.mBlendOutTime   = 0.2f;
+        mInjectingPacket.store(packet.get(), std::memory_order_release);
+        InjectionReset reset{mInjectingPacket};
+        packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+    };
+    auto const giveBack = [](Player& player, PoseClipRuntime::Playing const& playing) {
+        if (playing.mainhand && player.getCarriedItem().isNull()) player.setCarriedItem(*playing.mainhand);
+        if (playing.offhand && player.getOffhandSlot().isNull()) player.setOffhandSlot(*playing.offhand);
+    };
+
+    auto&                           playing = mPoseRuntime->playing;
+    std::unordered_set<std::string> active;
+    for (auto const& clip : mPoseClips) {
+        if (!clip.activeAt(mCurrentTick)) continue;
+        auto const id = ids.find(clip.subject);
+        if (id == ids.end()) continue;
+        auto* actor = level.fetchEntity(id->second, false);
+        if (!actor || !actor->isPlayer()) continue;
+        auto& player = static_cast<Player&>(*actor);
+        active.insert(clip.id);
+
+        auto& state = playing[clip.id];
+        if (state.actor != id->second || state.animation != clip.animation) {
+            state           = PoseClipRuntime::Playing{};
+            state.actor     = id->second;
+            state.animation = clip.animation;
+        }
+        // An actor only takes a clip after its first render, and a seek rebuilds it.
+        if (!findSkeletalClip(actor->getAnimationComponent(), clip.animation) && state.attempts++ % ResendAttempt == 0) {
+            send(*actor, clip.animation, false);
+        }
+        if (!clip.hideItems) {
+            giveBack(player, state);
+            state.mainhand.reset();
+            state.offhand.reset();
+            continue;
+        }
+        // Recorded equipment packets keep arriving; whatever they put in the hands is kept for the end of the clip.
+        if (!player.getCarriedItem().isNull()) {
+            state.mainhand = player.getCarriedItem();
+            player.setCarriedItem(ItemStack{});
+        }
+        if (!player.getOffhandSlot().isNull()) {
+            state.offhand = player.getOffhandSlot();
+            player.setOffhandSlot(ItemStack{});
+        }
+    }
+
+    for (auto it = playing.begin(); it != playing.end();) {
+        if (active.contains(it->first)) {
+            ++it;
+            continue;
+        }
+        auto* actor = level.fetchEntity(it->second.actor, false);
+        if (actor && actor->isPlayer()) {
+            send(*actor, it->second.animation, true);
+            giveBack(static_cast<Player&>(*actor), it->second);
+        }
+        it = playing.erase(it);
+    }
+}
+
+void ReplaySession::endPoseClips(bool forget) {
+    if (!mPoseRuntime) return;
+    if (!forget) {
+        auto const clips = std::exchange(mPoseClips, {});
+        applyPoseClips();
+        mPoseClips = clips;
+    }
+    mPoseRuntime->playing.clear();
+}
+
 // Per-action snapping misses entities that never moved during catch-up, so settle every recorded one here.
 void ReplaySession::settleAfterSeek() {
     if (mSeekParticlesStale) clearReplayParticles();
@@ -2734,6 +2841,8 @@ void ReplaySession::beginSeek(int targetTick) {
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     visuals::setReplaySubject(std::nullopt);
+    // The seek rebuilds every actor with what it held at the target tick.
+    endPoseClips(true);
 
     size_t selectedReader = mReaders.size() - 1;
     int    selectedStart  = 0;
@@ -2831,6 +2940,7 @@ void ReplaySession::tick() {
         if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
         applyCloudOverride();
         applyWeatherOverride();
+        applyPoseClips();
         updateScreenPreview();
         syncFollowedPlayerHud();
 
@@ -5049,6 +5159,7 @@ void ReplaySession::handleNextTick() {
     if (mReplayTime) ++*mReplayTime;
     if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
     applyWeatherOverride();
+    applyPoseClips();
     updateReplaySubjectPosture(false);
 }
 

@@ -1129,6 +1129,7 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
     }
 
     drawWorldSection(ctx);
+    drawPoseSection(ctx);
     drawShaderSection(ctx);
 
     ImGui::EndDisabled();
@@ -1528,6 +1529,131 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
 
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.worldHint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+    property::endSection();
+}
+
+void DetailsPanel::drawPoseSection(PanelContext const& ctx) {
+    using editing::model::PoseClip;
+    if (!ctx.state.project) return;
+    if (!property::beginSection("playback.refactorEditor.inspector.poses"_tr().c_str())) return;
+
+    auto const& project = *ctx.state.project;
+    auto const  players = std::span<state::ReplayPlayerView const>{ctx.state.replayPlayers};
+    auto const  commit  = [&ctx](std::vector<PoseClip> clips) {
+        EditorAction action{EditorActionType::SetPoseClips};
+        action.poseClips = std::move(clips);
+        ctx.submitAction(std::move(action));
+    };
+    auto const playerName = [&](std::string const& uuid) {
+        auto const found = std::ranges::find(players, uuid, &state::ReplayPlayerView::uuid);
+        return found == players.end() ? uuid : found->name;
+    };
+    int const playhead = ctx.state.currentTick;
+
+    for (size_t index = 0; index < project.poses.size(); ++index) {
+        auto const& clip = project.poses[index];
+        ImGui::PushID(clip.id.c_str());
+        if (index > 0) property::separator();
+        auto edited = project.poses;
+        auto& pose  = edited[index];
+
+        ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.posePlayer"_tr().c_str());
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::BeginCombo("##pose-player", playerName(clip.subject).c_str())) {
+            for (auto const& player : players) {
+                if (player.uuid.empty()) continue;
+                if (ImGui::Selectable(player.name.c_str(), player.uuid == clip.subject) && player.uuid != clip.subject) {
+                    pose.subject = player.uuid;
+                    commit(edited);
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.poseAnimation"_tr().c_str());
+        std::array<char, 256> animation{};
+        std::snprintf(animation.data(), animation.size(), "%s", clip.animation.c_str());
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText(
+                "##pose-animation",
+                animation.data(),
+                animation.size(),
+                ImGuiInputTextFlags_EnterReturnsTrue
+            )) {
+            pose.animation = animation.data();
+            commit(edited);
+        }
+        widgets::itemTooltip("playback.refactorEditor.inspector.poseAnimationHint"_tr().c_str());
+
+        int start = clip.startTick;
+        int end   = clip.endTick;
+        if (ImGui::InputInt(
+                "playback.refactorEditor.details.start"_tr().c_str(),
+                &start,
+                1,
+                20,
+                ImGuiInputTextFlags_EnterReturnsTrue
+            )) {
+            pose.startTick = std::clamp(start, 0, std::max(0, clip.endTick - 1));
+            commit(edited);
+        }
+        if (ImGui::InputInt(
+                "playback.refactorEditor.details.end"_tr().c_str(),
+                &end,
+                1,
+                20,
+                ImGuiInputTextFlags_EnterReturnsTrue
+            )) {
+            pose.endTick = std::max(end, clip.startTick + 1);
+            commit(edited);
+        }
+        if (ImGui::Button("playback.refactorEditor.inspector.poseStartHere"_tr().c_str()) && playhead < clip.endTick) {
+            pose.startTick = playhead;
+            commit(edited);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("playback.refactorEditor.inspector.poseEndHere"_tr().c_str()) && playhead > clip.startTick) {
+            pose.endTick = playhead;
+            commit(edited);
+        }
+
+        bool hideItems = clip.hideItems;
+        if (ImGui::Checkbox("playback.refactorEditor.inspector.poseHideItems"_tr().c_str(), &hideItems)) {
+            pose.hideItems = hideItems;
+            commit(edited);
+        }
+        if (property::actionButton("playback.refactorEditor.inspector.poseDelete"_tr().c_str())) {
+            edited.erase(edited.begin() + static_cast<std::ptrdiff_t>(index));
+            commit(edited);
+        }
+        ImGui::PopID();
+    }
+
+    property::separator();
+    if (property::actionButton("playback.refactorEditor.inspector.poseAdd"_tr().c_str())) {
+        // The followed player, else the first one recorded.
+        std::string subject = ctx.state.replaySubjectChoice;
+        if (std::ranges::find(players, subject, &state::ReplayPlayerView::uuid) == players.end() || subject.empty()) {
+            auto const first = std::ranges::find_if(players, [](auto const& player) { return !player.uuid.empty(); });
+            subject          = first == players.end() ? std::string{} : first->uuid;
+        }
+        std::string id;
+        for (size_t number = project.poses.size() + 1;; ++number) {
+            id = "pose-" + std::to_string(number);
+            if (std::ranges::find(project.poses, id, &PoseClip::id) == project.poses.end()) break;
+        }
+        auto clips = project.poses;
+        clips.push_back(PoseClip{
+            .id        = std::move(id),
+            .subject   = std::move(subject),
+            .startTick = playhead,
+            .endTick   = std::min(playhead + 100, std::max(playhead + 1, project.totalTicks)),
+        });
+        commit(std::move(clips));
+    }
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.posesHint"_tr().c_str());
     ImGui::PopTextWrapPos();
     property::endSection();
 }

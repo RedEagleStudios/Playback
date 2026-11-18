@@ -1,0 +1,17 @@
+{
+  "format_version": "1.8.0",
+  "animations": {
+    "animation.playback.pose.lean_crossed_arms": {
+      "loop": true,
+      "animation_length": 1.0,
+      "bones": {
+        "root": { "rotation": [0, 0, -6] },
+        "head": { "rotation": [8, -12, 4] },
+        "rightarm": { "rotation": [-80, -40, 0] },
+        "leftarm": { "rotation": [-70, 40, 0] },
+        "rightleg": { "rotation": [0, 0, 4] },
+        "leftleg": { "rotation": [-25, 0, -18] }
+      }
+    }
+  }
+}

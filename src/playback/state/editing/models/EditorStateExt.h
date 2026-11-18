@@ -2,6 +2,7 @@
 
 #include "CameraEntity.h"
 #include "Track.h"
+#include "PoseClip.h"
 #include "WorldActor.h"
 #include "WorldSettings.h"
 
@@ -28,6 +29,8 @@ struct EditorStateExt {
     std::vector<Transition> transitions;
 
     std::vector<Marker> markers;
+
+    std::vector<PoseClip> poses;
 
     WorldSettings world;
     // The replay's recorded camera views were added as camera tracks once; deleting them must not bring them back.

@@ -28,6 +28,8 @@ private:
     void drawSettingsPage(PanelContext const& ctx);
     void drawOptiPistonSection();
     void drawWorldSection(PanelContext const& ctx);
+    // Pose clips: a pose played on a replay player for a stretch of ticks, with the hands emptied.
+    void drawPoseSection(PanelContext const& ctx);
     // The Rendered pack's own options, laid out by its screens; values are saved in the project.
     void drawShaderSection(PanelContext const& ctx);
     void drawShaderScreen(

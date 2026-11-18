@@ -4,6 +4,7 @@
 #include "playback/keyframe/FollowCamera.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ClientVisualOverrides.h"
+#include "playback/state/editing/models/PoseClip.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
 #include "mc/deps/core/math/Vec2.h"
@@ -44,6 +45,7 @@ class ResourcePackStackPacket;
 class StartGamePacket;
 struct DimensionArguments;
 struct FollowedHudMirror;
+struct PoseClipRuntime;
 struct ServerBlockProperty;
 enum class MinecraftPacketIds : int;
 
@@ -431,6 +433,9 @@ private:
     std::atomic_bool mRecordedItemRegistryApplied{};
     // Observer hotbar saved while another player's HUD is shown, so the recorder's slots can be put back.
     std::unique_ptr<FollowedHudMirror> mFollowedHudMirror;
+    // The project's pose clips (setPoseClips), and what each playing one has done to its player.
+    std::vector<state::editing::model::PoseClip> mPoseClips;
+    std::unique_ptr<PoseClipRuntime>             mPoseRuntime;
 
 public:
     bool mIsProcessingSnapshot = false;
@@ -610,6 +615,10 @@ private:
     // A recorded weather event just moved the client's weather: that is the recording's now, kept for when the
     // override goes off.
     void noteRecordedWeather();
+    // Starts, holds and ends the pose clips at the current tick: plays the pose on its player and empties its hands.
+    void applyPoseClips();
+    // Ends every playing pose clip and gives its player back what it held; with forget, only drops what they did.
+    void endPoseClips(bool forget);
     void rebindReplaySubject();
     void refreshReplaySubjectBinding();
     // Points the follow view at the preview camera track under the playhead. Export drives its own shots.
@@ -680,6 +689,10 @@ public:
     }
     // The project's weather; nullopt plays the recorded weather.
     void setWeatherOverride(std::optional<state::editing::model::WeatherStyle> weather) { mWeatherOverride = weather; }
+    // The project's pose clips; each plays on its player from its start tick to its end tick.
+    void setPoseClips(std::vector<state::editing::model::PoseClip> const& clips) {
+        if (mPoseClips != clips) mPoseClips = clips;
+    }
     // The viewport's Flat view: Simple graphics and full brightness while editing. Exports clear it. Any thread.
     void setFlatPreview(bool flat) noexcept { mFlatPreview.store(flat, std::memory_order_release); }
     [[nodiscard]] std::shared_ptr<std::vector<state::editing::model::GlobalPack> const> installedGlobalPacks() const {
