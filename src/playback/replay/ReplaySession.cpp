@@ -1,5 +1,7 @@
 #include "ReplaySession.h"
 
+#include "BlockStateCondition.h"
+
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
 #include "playback/editor/input/EditorInput.h"
@@ -41,6 +43,8 @@
 #include "mc/deps/ecs/strict/StrictEntityContext.h"
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/IntTag.h"
+#include "mc/deps/nbt/ListTag.h"
+#include "mc/deps/nbt/StringTag.h"
 #include "mc/deps/shared_types/legacy/LevelEvent.h"
 #include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
@@ -163,8 +167,12 @@
 #include "mc/world/level/block/components/BlockTypeComponentStorageFinalizer.h"
 #include "mc/world/level/block/definition/BlockComponentGroupDescription.h"
 #include "mc/world/level/block/definition/BlockDefinition.h"
+#include "mc/world/level/block/definition/BlockPermutationDescription.h"
 #include "mc/world/level/block/definition/BlockDefinitionGroup.h"
 #include "mc/world/level/block/definition/BlockStateDefinition.h"
+#include "mc/world/level/block/states/BlockStateGroup.h"
+#include "mc/world/level/block/states/BlockStateMeta.h"
+#include "mc/world/level/block/traits/block_trait/ITrait.h"
 #include "mc/world/level/block/definition/ServerBlockProperty.h"
 #include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/chunk/ChunkSource.h"
@@ -271,6 +279,25 @@ bool initializeRecordedBlock(::BlockDefinitionGroup& definitions, ::BlockDefinit
         return false;
     }
     return true;
+}
+
+// LeviLamina's registerDataDrivenBlock registers the type without the states and traits its description declares, so
+// createBlockPermutations made a single permutation: every recorded state of an add-on block (a colour, a facing, a
+// connection) resolved to nothing and the block was missing from the replay. States first, then traits, which add the
+// vanilla states they drive (minecraft:cardinal_direction for placement_direction).
+void addRecordedBlockStates(::BlockType& type, ::BlockDescription const& description) {
+    if (!type.mBlockStateGroup) type.mBlockStateGroup = std::make_unique<::BlockStateGroup>();
+    auto& group = *type.mBlockStateGroup;
+    for (auto const& state : *description.mStates) group.registerBlockStateDefinition(state);
+    // Definitions from JSON (every add-on block, network-digested ones included) land in the JSON map.
+    for (auto const* states : {&*group.mBlockStates, &*group.mJsonBlockStates}) {
+        for (auto const& [index, meta] : *states) {
+            if (meta && meta->mEnumValues) type.addState(meta->mBlockState, meta->mEnumValues->size());
+        }
+    }
+    for (auto const& [traitName, trait] : *description.mTraits->mMap) {
+        if (trait) trait->applyToBlockType(type);
+    }
 }
 
 // The viewer's clouds option, changed without saving the options file: a crash while a project hides the clouds
@@ -3556,14 +3583,13 @@ void ReplaySession::applyRecordedBlockRegistry() {
             if (!registry.lookupByName(HashedString{name}, false)) {
                 auto blockType = definitions->registerDataDrivenBlock(definition->mDescription);
                 if (!blockType) continue;
+                addRecordedBlockStates(*blockType, definition->mDescription);
                 blockType->createBlockPermutations(*updaterVersion);
                 definitions->initBlockTypeFromDefinition(*blockType, *definition);
                 ++registered;
             }
             recorded.emplace_back(*name, definition);
         }
-
-        auto const injectedVisuals = injectRecordedBlockMaterialComponents(properties);
 
         // One at a time rather than BlockDefinitionGroup::initializeBlocks, which runs every definition unchecked
         // and lets one faulting add-on block crash the replay.
@@ -3579,6 +3605,10 @@ void ReplaySession::applyRecordedBlockRegistry() {
             getLogger()
                 .warn("Skipped {} recorded custom block(s) the game could not initialize: {}", skippedCount, skipped);
         }
+
+        // After initialization, which puts the definition's base components back on every permutation and would
+        // undo the per-state looks set here.
+        auto const injectedVisuals = injectRecordedBlockMaterialComponents(properties);
 
         // 26.51 no longer exports BlockTypeRegistry::setupDirectAccessBlocks; it is inlined into
         // VanillaWorldSystems::init, which already ran when this replay world was created, and it is the only
@@ -3656,6 +3686,50 @@ size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<ServerBlockProper
     return loaded;
 }
 
+namespace {
+
+struct PermutationVisual {
+    std::string                      condition;
+    BlockComponentDescription const* geometry = nullptr;
+    BlockComponentDescription const* material = nullptr;
+};
+
+// The definition's permutations that change how the block looks, with their conditions as the recording wrote them.
+// The recorded properties list the permutations in the definition's order; a decoded condition is the fallback when the
+// two disagree.
+std::vector<PermutationVisual>
+recordedPermutationVisuals(BlockDefinition const& definition, CompoundTag const& recorded) {
+    std::vector<std::string> conditions;
+    if (recorded.contains("permutations", Tag::Type::List)) {
+        for (auto const& entry : recorded.at("permutations").get<ListTag>()) {
+            auto const* permutation = entry.hold(Tag::Type::Compound) ? &entry->as<CompoundTag>() : nullptr;
+            conditions.emplace_back(
+                permutation && permutation->contains("condition", Tag::Type::String)
+                    ? static_cast<std::string const&>(permutation->at("condition").get<StringTag>())
+                    : std::string{}
+            );
+        }
+    }
+
+    auto const&                    descriptions = *definition.mPermutationDescriptions;
+    bool const                     aligned      = conditions.size() == descriptions.size();
+    std::vector<PermutationVisual> visuals;
+    for (size_t index = 0; index < descriptions.size(); ++index) {
+        auto const& components = *descriptions[index].mComponents;
+        PermutationVisual visual{
+            {},
+            components.getComponentDescription("minecraft:geometry"),
+            components.getComponentDescription("minecraft:material_instances"),
+        };
+        if (!visual.geometry && !visual.material) continue;
+        visual.condition = aligned ? conditions[index] : descriptions[index].mCondition->getExpressionString();
+        visuals.push_back(std::move(visual));
+    }
+    return visuals;
+}
+
+} // namespace
+
 size_t ReplaySession::injectRecordedBlockMaterialComponents(std::vector<ServerBlockProperty> const& properties) {
     auto level = ll::service::getLevel();
     if (!level) return 0;
@@ -3712,40 +3786,60 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(std::vector<ServerBl
         if (!blockType) continue;
         auto& type = const_cast<BlockType&>(*blockType);
 
+        // 26.51 folds BlockGeometryDescription's storage overload into a stub; the context overload does the work and
+        // the base class forwards it to the storage overload for other descriptions.
+        auto initialize = [&type](BlockComponentDescription const& description, BlockComponentStorage& storage) {
+            struct {
+                BlockComponentStorage* storage;
+                BlockType*             blockType;
+            } layout{&storage, &type};
+            static_assert(sizeof(layout) == sizeof(BlockComponentDescription::InitializationContext));
+            description.initializeComponent(
+                *reinterpret_cast<BlockComponentDescription::InitializationContext*>(&layout)
+            );
+        };
+        auto injectInto = [&initialize](Block& permutation, BlockComponentDescription const& description) {
+            permutation.mComponents->allowComponentReplacement();
+            initialize(description, *permutation.mComponents);
+            permutation.finalizeBlockComponentStorage();
+            BlockComponentStorageFinalizer{}.finalizeComponentData(permutation);
+        };
         // Init layer only: the engine's rendering pass skips blocks whose Rendering layer is already marked.
-        auto inject = [&type](BlockComponentDescription const& description) {
-            // 26.51 folds BlockGeometryDescription's storage overload into a stub; the context overload does the work
-            // and the base class forwards it to the storage overload for other descriptions.
-            auto initialize = [&](BlockComponentStorage& storage) {
-                struct {
-                    BlockComponentStorage* storage;
-                    BlockType*             blockType;
-                } layout{&storage, &type};
-                static_assert(sizeof(layout) == sizeof(BlockComponentDescription::InitializationContext));
-                description.initializeComponent(
-                    *reinterpret_cast<BlockComponentDescription::InitializationContext*>(&layout)
-                );
-            };
-
+        auto inject = [&](BlockComponentDescription const& description) {
             type.mComponents->allowComponentReplacement();
-            initialize(*type.mComponents);
+            initialize(description, *type.mComponents);
             BlockTypeComponentStorageFinalizer{}.finalizeComponentData(type);
-
             for (auto const& permutation : *type.mBlockPermutations) {
-                if (!permutation) continue;
-                permutation->mComponents->allowComponentReplacement();
-                initialize(*permutation->mComponents);
-                permutation->finalizeBlockComponentStorage();
-                BlockComponentStorageFinalizer{}.finalizeComponentData(*permutation);
+                if (permutation) injectInto(*permutation, description);
             }
         };
 
-        if (materialDescription) {
+        auto const permutationVisuals = recordedPermutationVisuals(*definition, *tag);
+        if (materialDescription || !permutationVisuals.empty()) {
             if (geometryDescription) {
                 // The 26.51.6 headers stub NetworkedBlockComponentDescription, hiding the base; the call is virtual.
                 inject(*geometryDescription);
             }
-            inject(*reinterpret_cast<BlockMaterialInstancesDescription const*>(materialDescription));
+            if (materialDescription) {
+                inject(*reinterpret_cast<BlockMaterialInstancesDescription const*>(materialDescription));
+            }
+            // The base alone would draw every permutation alike: furniture that keeps its look in permutations (a
+            // blank base material, the wood and colour per state) went invisible. Matching permutations follow, in
+            // file order, as in the game.
+            for (auto const& permutation : *type.mBlockPermutations) {
+                if (!permutation || !permutation->mSerializationId->contains("states", Tag::Type::Compound)) continue;
+                auto const& states = permutation->mSerializationId->at("states").get<CompoundTag>();
+                for (auto const& visual : permutationVisuals) {
+                    if (evaluateBlockStateCondition(visual.condition, states) != true) continue;
+                    if (visual.geometry) injectInto(*permutation, *visual.geometry);
+                    if (visual.material) {
+                        injectInto(
+                            *permutation,
+                            *reinterpret_cast<BlockMaterialInstancesDescription const*>(visual.material)
+                        );
+                    }
+                }
+            }
             ++modernInjected;
             continue;
         }
