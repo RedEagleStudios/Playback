@@ -34,6 +34,7 @@ enum class EditorActionType {
     DeleteReplays,
     RenameReplay,
     ShowReplayInFolder,
+    OpenReplaysFolder,
     ClearReplayBrowserError,
     SaveProject,
     LoadProject,

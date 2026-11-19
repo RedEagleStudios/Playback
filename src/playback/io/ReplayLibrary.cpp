@@ -463,6 +463,18 @@ bool ReplayLibrary::showInFolder(ReplaySummary const& replay) {
     return true;
 }
 
+bool ReplayLibrary::openReplaysFolder() {
+    std::error_code ec;
+    auto const      folder = std::filesystem::absolute(utils::PathUtils::getReplaysDir(), ec);
+    if (ec) return false;
+    std::filesystem::create_directories(folder, ec);
+    if (ec) return false;
+    return reinterpret_cast<intptr_t>(
+               ShellExecuteW(nullptr, L"open", folder.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL)
+           )
+         > 32;
+}
+
 bool ReplayLibrary::renameReplay(ReplaySummary const& replay, std::string_view newName, std::string& error) {
     error.clear();
 

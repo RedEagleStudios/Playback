@@ -827,7 +827,8 @@ void SelectReplayScreen::drawNavigation() {
     // tooltips still spell out; narrower still, the title goes and the back arrow alone leads the bar.
     constexpr float searchMinWidth   = 180.0f;
     constexpr float searchFloorWidth = 120.0f;
-    float const     fixedW           = iconW + viewW + gap * 3.0f + kNavigationLayout.viewGroupGap;
+    // Fixed-width controls: the open-folder and settings icon buttons, and the view toggle.
+    float const     fixedW           = iconW * 2.0f + viewW + gap * 4.0f + kNavigationLayout.viewGroupGap;
     float           controlsLeft     = titleRight + margin;
     float           importW          = toolbarButtonWidth(ICON_EXPORT, importLabelText);
     float           sortW            = toolbarButtonWidth(ICON_SORT, sortLabelText, ICON_CHEVRON_DOWN);
@@ -878,6 +879,13 @@ void SelectReplayScreen::drawNavigation() {
     if (toolbarButton("##import", ICON_EXPORT, compact ? std::string_view{} : importLabelText, importW)) importReplay();
     tooltip("playback.replayBrowser.navigation.importTooltip"_tr().c_str());
     x += importW + gap;
+
+    ImGui::SetCursorPos({x, y});
+    if (toolbarButton("##open-folder", ICON_OPEN, {}, iconW)) {
+        submit({playback::state::EditorActionType::OpenReplaysFolder});
+    }
+    tooltip("playback.replayBrowser.navigation.openFolderTooltip"_tr().c_str());
+    x += iconW + gap;
 
     // Keep filtering and sorting in one fixed-label menu so the toolbar stays compact and stable.
     ImGui::SetCursorPos({x, y});

@@ -738,6 +738,15 @@ void EditorController::tick(bool hudVisible) {
                 }
             });
             break;
+        case EditorActionType::OpenReplaysFolder:
+            runBrowserOperation(ReplayBrowserOperation::ShowingInFolder, hudVisible, [&] {
+                if (io::ReplayLibrary::openReplaysFolder()) {
+                    mBrowserError.clear();
+                } else {
+                    mBrowserError = "playback.replayBrowser.error.openFolderFailed"_tr();
+                }
+            });
+            break;
         case EditorActionType::ClearReplayBrowserError:
             mBrowserError.clear();
             break;

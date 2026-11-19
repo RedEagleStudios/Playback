@@ -53,6 +53,8 @@ public:
     [[nodiscard]] static bool importReplay(std::filesystem::path const& source, std::string& error);
     [[nodiscard]] static bool deleteReplay(ReplaySummary const& replay, std::string& error);
     [[nodiscard]] static bool showInFolder(ReplaySummary const& replay);
+    // Opens the replays folder in File Explorer, creating it when it does not exist yet.
+    [[nodiscard]] static bool openReplaysFolder();
 
     [[nodiscard]] static bool renameReplay(ReplaySummary const& replay, std::string_view newName, std::string& error);
 };
