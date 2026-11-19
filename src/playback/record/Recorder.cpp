@@ -2925,18 +2925,22 @@ void Recorder::trackControllerTransitions(Packet const& packet) {
     std::scoped_lock lock(mControllerTransitionsMutex);
     for (auto const& id : *animate.mRuntimeIds) {
         auto& transitions = mControllerTransitions[id.rawID];
-        auto  existing    = std::ranges::find_if(transitions, [&](ControllerTransition const& transition) {
+        // The client appends every transition, and a state may have two to the same target (Ore Fusion's attacks go to
+        // their hold when the hammer is put away and when the attack ends). Only an exact repeat, such as a controller
+        // sent again on the next equip, adds nothing.
+        bool const repeated = std::ranges::any_of(transitions, [&](ControllerTransition const& transition) {
             return transition.controller == *animate.mController && transition.state == *animate.mAnimation
-                && transition.nextState == *animate.mNextState;
+                && transition.nextState == *animate.mNextState && transition.stopExpression == *animate.mStopExpression;
         });
-        // A state's transitions are checked in the order they were added, so an updated one keeps its place.
-        if (existing == transitions.end()) {
-            transitions.push_back({*animate.mController, *animate.mAnimation, *animate.mNextState});
-            existing = std::prev(transitions.end());
-        }
-        existing->stopExpression        = *animate.mStopExpression;
-        existing->stopExpressionVersion = animate.mStopExpressionVersion;
-        existing->blendOutTime          = animate.mBlendOutTime;
+        if (repeated) continue;
+        transitions.push_back(
+            {*animate.mController,
+             *animate.mAnimation,
+             *animate.mNextState,
+             *animate.mStopExpression,
+             animate.mStopExpressionVersion,
+             animate.mBlendOutTime}
+        );
     }
 }
 
