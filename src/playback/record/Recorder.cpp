@@ -1969,6 +1969,10 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
                     appendEntityPacket(*packet);
                 }
             }
+            // After the equipment, so controllers whose transitions test the held item see it from the first frame.
+            for (auto const& packet : controllerTransitionPackets(actor.getRuntimeID(), runtimeId)) {
+                appendEntityPacket(*packet);
+            }
             return true;
         };
 
@@ -2876,6 +2880,7 @@ bool Recorder::writeLocalPlayerState() {
 }
 
 void Recorder::recordReceivedPacket(Packet const& packet, std::string_view payload) {
+    trackControllerTransitions(packet);
     switch (packet.getId()) {
     // Spawns are rebuilt from the entity the handler creates.
     case MinecraftPacketIds::AddActor:
@@ -2887,6 +2892,75 @@ void Recorder::recordReceivedPacket(Packet const& packet, std::string_view paylo
     default:
         recordGamePacket(packet, payload);
     }
+}
+
+void Recorder::trackControllerTransitions(Packet const& packet) {
+    switch (packet.getId()) {
+    case MinecraftPacketIds::StartGame: {
+        std::scoped_lock lock(mControllerTransitionsMutex);
+        mControllerTransitions.clear();
+        return;
+    }
+    case MinecraftPacketIds::RemoveActor: {
+        // Runs before the handler, so the actor is still there to name its runtime ID. The client drops the
+        // controllers with the actor; a server that does not send them again leaves the actor without them in game too.
+        auto  client      = ll::service::getClientInstance();
+        auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
+        if (!localPlayer) return;
+        auto const& remove = static_cast<RemoveActorPacket const&>(packet);
+        auto* const actor  = localPlayer->getLevel().fetchEntity(*remove.mEntityId, false);
+        if (!actor) return;
+        std::scoped_lock lock(mControllerTransitionsMutex);
+        mControllerTransitions.erase(actor->getRuntimeID().rawID);
+        return;
+    }
+    case MinecraftPacketIds::TriggerAnimation:
+        break;
+    default:
+        return;
+    }
+    auto const& animate = static_cast<AnimateEntityPacket const&>(packet);
+    // A clip without a controller plays once; replaying it from a snapshot would start it again.
+    if (animate.mController->empty()) return;
+    std::scoped_lock lock(mControllerTransitionsMutex);
+    for (auto const& id : *animate.mRuntimeIds) {
+        auto& transitions = mControllerTransitions[id.rawID];
+        auto  existing    = std::ranges::find_if(transitions, [&](ControllerTransition const& transition) {
+            return transition.controller == *animate.mController && transition.state == *animate.mAnimation
+                && transition.nextState == *animate.mNextState;
+        });
+        // A state's transitions are checked in the order they were added, so an updated one keeps its place.
+        if (existing == transitions.end()) {
+            transitions.push_back({*animate.mController, *animate.mAnimation, *animate.mNextState});
+            existing = std::prev(transitions.end());
+        }
+        existing->stopExpression        = *animate.mStopExpression;
+        existing->stopExpressionVersion = animate.mStopExpressionVersion;
+        existing->blendOutTime          = animate.mBlendOutTime;
+    }
+}
+
+std::vector<std::shared_ptr<Packet>>
+Recorder::controllerTransitionPackets(ActorRuntimeID source, ActorRuntimeID target) {
+    std::vector<std::shared_ptr<Packet>> packets;
+    std::scoped_lock                     lock(mControllerTransitionsMutex);
+    auto const                           found = mControllerTransitions.find(source.rawID);
+    if (found == mControllerTransitions.end()) return packets;
+    packets.reserve(found->second.size());
+    for (auto const& transition : found->second) {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::TriggerAnimation);
+        if (!packet) break;
+        auto& animate                  = static_cast<AnimateEntityPacket&>(*packet);
+        *animate.mRuntimeIds           = {target};
+        animate.mAnimation             = transition.state;
+        animate.mNextState             = transition.nextState;
+        animate.mStopExpression        = transition.stopExpression;
+        animate.mStopExpressionVersion = transition.stopExpressionVersion;
+        animate.mController            = transition.controller;
+        animate.mBlendOutTime          = transition.blendOutTime;
+        packets.push_back(std::move(packet));
+    }
+    return packets;
 }
 
 void Recorder::recordHandledPacket(Packet const& packet) {

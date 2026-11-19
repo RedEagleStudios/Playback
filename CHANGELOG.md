@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Animation controllers that add-ons build with `/playanimation` before a recording starts play in its replay. Such a controller is often sent once, when an item is equipped, and then driven by Molang variables, so a recording started later held only the variable changes and the player stayed in the default pose (Ore Fusion's Mjolnir flight showed the player standing). The recorder keeps every player's and mob's controller transitions while idle too and writes them into each snapshot after the actor. Replays recorded before this cannot be fixed this way: they never contained the transitions.
+- Replays use the resource packs they carry even when a pack with the same identity is installed on the viewing machine, such as a development copy of the server's add-on. The installed pack used to win, and the replay drew with its version: Ore Fusion's Mjolnir animations from an older development copy were missing, so the client refused the controller states that used them and the player stood still instead of spinning the hammer or flying. An unencrypted embedded pack that collides now takes a uuid derived from its own while the replay is open, and the replayed pack list and stack name it.
+- Animation controller transitions sent to an actor before its animation component is ready wait until it is, then go in together in their original order. A seek re-adds the recorded actors and their transitions in the same frame, and the client dropped them, so add-on poses stopped after a seek.
 - Recorded player positions and replay player lists no longer drop players during respawn or when another entity reuses their runtime ID.
 - Piston animations now stay aligned when camera tracks or cuts move the view across long distances during preview and export.
 - First-person camera views no longer jitter or clip into nearby blocks from integrated-server movement corrections.

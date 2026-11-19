@@ -8,6 +8,7 @@
 
 #include "mc/legacy/ActorRuntimeID.h"
 #include "mc/legacy/ActorUniqueID.h"
+#include "mc/molang/MolangVersion.h"
 #include "mc/platform/UUID.h"
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/level/ChunkPos.h"
@@ -281,6 +282,20 @@ private:
     // recording started mid-cutscene still records it.
     std::atomic<bool> mCommandCameraActive{false};
 
+    // Transitions that /playanimation added to client-built animation controllers, per actor runtime ID, in the order
+    // the client received them. Add-ons build such a controller once and then drive it through Molang variables, so a
+    // recording started after the build needs the transitions in its snapshot. Tracked while idle too.
+    struct ControllerTransition {
+        std::string   controller;
+        std::string   state;
+        std::string   nextState;
+        std::string   stopExpression;
+        MolangVersion stopExpressionVersion{};
+        float         blendOutTime{};
+    };
+    std::mutex                                                      mControllerTransitionsMutex;
+    std::unordered_map<uint64_t, std::vector<ControllerTransition>> mControllerTransitions;
+
     std::optional<DimensionType>        mRecordingDimension;
     std::string                         mSnapshotFailure;
     std::chrono::steady_clock::duration mLongestSnapshotStall{};
@@ -435,6 +450,12 @@ private:
     void ensureRecordedItemRegistry(::Level& level);
 
     void recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallbackPacket);
+
+    void trackControllerTransitions(Packet const& packet);
+
+    // The tracked transitions of the actor `source` as packets addressed to `target`.
+    [[nodiscard]] std::vector<std::shared_ptr<Packet>>
+    controllerTransitionPackets(ActorRuntimeID source, ActorRuntimeID target);
 
     void recordLevelChunkPacket(LevelChunkPacket const& packet, std::string_view payload);
 

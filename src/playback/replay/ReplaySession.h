@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -32,6 +33,7 @@ class Dimension;
 class LevelChunk;
 class LevelChunkPacket;
 class Actor;
+class AnimateEntityPacket;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
 class Player;
@@ -333,6 +335,14 @@ private:
     };
     std::unordered_map<uint64_t, SeekAnimationClip>             mSeekAnimationClips;
     std::vector<SeekAnimationClip>                              mPendingAnimationClips;
+    // Controller transitions (/playanimation with a controller) for an actor whose animation component is not
+    // initialized yet: the client drops them, so they wait here, in order, and go in together once it is.
+    struct DeferredControllerPacket {
+        std::string                 payload;
+        std::vector<ActorRuntimeID> targets;
+    };
+    std::deque<DeferredControllerPacket> mDeferredControllerPackets;
+    bool                                 mApplyingDeferredControllers{};
     std::optional<ActorUniqueID>                                mRecordedLocalPlayerId;
     struct ReplayPlayerRecord {
         ActorUniqueID id;
@@ -522,6 +532,9 @@ private:
         size_t                                       maxPackets,
         std::chrono::steady_clock::time_point const& deadline
     );
+
+    [[nodiscard]] bool deferControllerPacket(AnimateEntityPacket const& packet, std::string_view payload);
+    void               flushDeferredControllerPackets();
 
     [[nodiscard]] bool clearRecordedEntities();
 

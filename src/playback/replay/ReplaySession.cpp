@@ -1054,6 +1054,7 @@ void ReplaySession::clearReplayData() {
     mPendingSubChunkPackets.clear();
     mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
+    mDeferredControllerPackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
     mRecordedLocalPlayerId.reset();
@@ -2678,6 +2679,7 @@ void ReplaySession::tick() {
         applyCloudOverride();
         mVisualOverrides.apply();
         resumeSeekAnimationClips();
+        flushDeferredControllerPackets();
         updateScreenPreview();
         syncFollowedPlayerHud();
 
@@ -3033,6 +3035,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mPendingSubChunkPackets.clear();
     mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
+    mDeferredControllerPackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
     mRecordedLocalPlayerId.reset();
@@ -3086,7 +3089,8 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
     auto const* serializedInfo  = findPacket(MinecraftPacketIds::ResourcePacksInfo);
     auto const* serializedStack = findPacket(MinecraftPacketIds::ResourcePackStack);
 
-    std::shared_ptr<ResourcePacksInfoPacket> info;
+    std::shared_ptr<ResourcePacksInfoPacket>      info;
+    std::optional<io::packs::MountedReplayPacks> mounted;
     if (serializedInfo) {
         info      = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
         auto keys = info->toPacksInfoData().collectKeys();
@@ -3094,7 +3098,8 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
         repository.addCachedResourcePacks(&keys);
         // Packs embedded in the replay take over from the local download cache; old replays keep using the cache.
         try {
-            mMountedReplayPacks = io::packs::mountReplayPacks(repository, *info, mReplayFilePath);
+            mounted = io::packs::mountReplayPacks(repository, *info, mReplayFilePath);
+            if (mounted) mMountedReplayPacks = mounted->root;
         } catch (std::exception const& exception) {
             getLogger().warn("Unable to mount embedded resource packs, using the local cache: {}", exception.what());
         }
@@ -3104,6 +3109,7 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
 
     auto stack = std::static_pointer_cast<ResourcePackStackPacket>(decodePacket(*serializedStack));
     if (!info) return true;
+    if (mounted) io::packs::renameReplayPacks(*info, *stack, *mounted);
     mReplayResourcePacksInfo.store(std::move(info), std::memory_order_release);
     mReplayResourcePackStack.store(std::move(stack), std::memory_order_release);
     return true;
@@ -3597,6 +3603,7 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
     clearSeekChunkDeferral();
     mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
+    mDeferredControllerPackets.clear();
     if (!clearRecordedEntities()) {
         mReplayFailed = true;
         return;
@@ -5899,6 +5906,10 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             if (id.rawID == liveRuntimeId) id = ActorRuntimeID{record::RecordedPlayerRuntimeIdValue};
         }
     }
+    if (packetId == MinecraftPacketIds::TriggerAnimation && !mApplyingDeferredControllers
+        && deferControllerPacket(static_cast<AnimateEntityPacket const&>(*packet), payload)) {
+        return true;
+    }
     if (packetId == MinecraftPacketIds::TriggerAnimation && mSeekTargetTick >= 0) {
         auto const& animate = static_cast<AnimateEntityPacket&>(*packet);
         for (auto const& id : *animate.mRuntimeIds) {
@@ -6361,8 +6372,56 @@ bool ReplaySession::flushPendingSnapshotGamePackets(
     return true;
 }
 
+namespace {
+// Missing actors count as ready: the client drops a packet for them either way, and the queue must move on.
+bool controllerTargetReady(Level& level, ActorRuntimeID id) {
+    auto* const actor = level.getRuntimeEntity(id, false);
+    if (!actor) return true;
+    auto const* component = actor->mAnimationComponent.get();
+    return component && component->mAnimationComponentInitialized;
+}
+} // namespace
+
+bool ReplaySession::deferControllerPacket(AnimateEntityPacket const& packet, std::string_view payload) {
+    if (packet.mController->empty() || !mReplayPlayer) return false;
+    auto& level = mReplayPlayer->getLevel();
+    // Once one waits, later ones wait behind it: a state's transitions are checked in the order they arrived.
+    if (mDeferredControllerPackets.empty()
+        && std::ranges::all_of(*packet.mRuntimeIds, [&](ActorRuntimeID id) { return controllerTargetReady(level, id); }
+        )) {
+        return false;
+    }
+    mDeferredControllerPackets.push_back({std::string{payload}, *packet.mRuntimeIds});
+    return true;
+}
+
+void ReplaySession::flushDeferredControllerPackets() {
+    if (mDeferredControllerPackets.empty() || !mReplayPlayer) return;
+    auto&  level   = mReplayPlayer->getLevel();
+    size_t applied = 0;
+    mApplyingDeferredControllers = true;
+    while (!mDeferredControllerPackets.empty()) {
+        auto& front = mDeferredControllerPackets.front();
+        if (!std::ranges::all_of(front.targets, [&](ActorRuntimeID id) { return controllerTargetReady(level, id); })) {
+            break;
+        }
+        if (!applyGamePacket(MinecraftPacketIds::TriggerAnimation, front.payload)) mReplayFailed = true;
+        mDeferredControllerPackets.pop_front();
+        ++applied;
+    }
+    mApplyingDeferredControllers = false;
+    if (applied != 0) {
+        getLogger().debug(
+            "Applied {} deferred animation controller packets ({} still waiting)",
+            applied,
+            mDeferredControllerPackets.size()
+        );
+    }
+}
+
 bool ReplaySession::clearRecordedEntities() {
     visuals::setReplaySubject(std::nullopt);
+    mDeferredControllerPackets.clear();
     clearReplayPlayers(false);
     gReplayHandBobTick.clear();
     gReplayHotbars.clear();
