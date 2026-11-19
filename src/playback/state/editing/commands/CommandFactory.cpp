@@ -43,6 +43,14 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createAddCameraKeyframe(
 ) {
     return std::make_unique<AddKeyframe>(id, tick, captured);
 }
+std::unique_ptr<model::IEditCommand> CommandFactory::createSaveCameraToKeyframe(
+    const std::string&         id,
+    int                        tick,
+    model::CameraKeyframe      pose,
+    std::optional<std::string> subject
+) {
+    return std::make_unique<SaveCameraToKeyframe>(id, tick, std::move(pose), std::move(subject));
+}
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createMoveCameraKeyframe(const std::string& id, int fromTick, int toTick) {
     return std::make_unique<MoveKeyframe>(id, fromTick, toTick);

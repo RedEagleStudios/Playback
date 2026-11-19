@@ -114,6 +114,52 @@ void AddKeyframe::execute(model::EditorStateExt& state) {
 void        AddKeyframe::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string AddKeyframe::label() const { return "Add Keyframe"; }
 
+SaveCameraToKeyframe::SaveCameraToKeyframe(
+    std::string                cameraId,
+    int                        tick,
+    model::CameraKeyframe      pose,
+    std::optional<std::string> subject
+)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mPose(std::move(pose)),
+  mSubject(std::move(subject)) {}
+
+void SaveCameraToKeyframe::execute(model::EditorStateExt& state) {
+    auto*      camera = findCamera(state, mCameraId);
+    auto const tick   = std::clamp(mTick, 0, state.totalTicks);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore             = state;
+    bool const person   = camera->kind != model::CameraTrackKind::Keyframe;
+    auto const existing = camera->keysByTick.find(tick);
+    if (existing != camera->keysByTick.end()) {
+        auto& key    = existing->second;
+        key.position = mPose.position;
+        key.yaw      = mPose.yaw;
+        key.pitch    = mPose.pitch;
+        key.roll     = mPose.roll;
+        key.fov      = mPose.fov;
+        if (person && mSubject) key.subject = *mSubject;
+        return;
+    }
+
+    model::CameraKeyframe key = mPose;
+    key.subject.clear();
+    if (person) {
+        if (mSubject) key.subject = *mSubject;
+        else if (auto const next = camera->keysByTick.lower_bound(tick); next != camera->keysByTick.begin())
+            key.subject = std::prev(next)->second.subject;
+    }
+    camera->keysByTick.emplace(tick, std::move(key));
+}
+
+void        SaveCameraToKeyframe::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SaveCameraToKeyframe::label() const { return "Save Camera to Keyframe"; }
+
 MoveKeyframe::MoveKeyframe(std::string cameraId, int fromTick, int toTick)
 : mCameraId(std::move(cameraId)),
   mFromTick(fromTick),

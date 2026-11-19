@@ -19,6 +19,7 @@
 #include "mc/network/packet/PackInfoData.h"
 #include "mc/network/packet/PacksInfoData.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
+#include "mc/network/packet/ResourcePackStackPacketPayload.h"
 #include "mc/platform/UUID.h"
 #include "mc/resources/CompositePackSource.h"
 #include "mc/resources/DirectoryPackSource.h"
@@ -318,6 +319,26 @@ ZipPackResult zipPackDirectory(
     return result;
 }
 
+// A pack installed on this machine with the identity of one the replay embeds (a development copy of the server's
+// add-on, say) is picked over the embedded copy, and the replay draws with that version of the animations and models.
+// The embedded copy then takes this uuid instead, derived from its own so a reused extraction keeps it.
+mce::UUID replayUuidFor(std::string_view uuid) { return mce::UUID::fromStringHash(lowercase(uuid) + "/playback-replay"); }
+
+// Sets the extracted manifest's header uuid, leaving the file alone when it already holds it.
+bool writeManifestUuid(std::filesystem::path const& manifestPath, std::string const& uuid) {
+    std::ifstream input(manifestPath, std::ios::binary);
+    if (!input) return false;
+    auto manifest = nlohmann::json::parse(input, nullptr, false, true);
+    input.close();
+    if (manifest.is_discarded() || !manifest.contains("header") || !manifest["header"].is_object()) return false;
+    auto& header = manifest["header"];
+    if (header.value("uuid", std::string{}) == uuid) return true;
+    header["uuid"] = uuid;
+    std::ofstream output(manifestPath, std::ios::binary | std::ios::trunc);
+    output << manifest.dump(4);
+    return static_cast<bool>(output);
+}
+
 } // namespace
 
 PackManifest const& manifestOf(ResourcePack const& pack) {
@@ -403,10 +424,16 @@ std::optional<std::string> readEntry(zip_t* archive, zip_uint64_t index, uint64_
     return data;
 }
 
+struct EmbeddedPack {
+    std::string uuid; // as recorded
+    std::string folder;
+};
+
 struct EmbeddedIndex {
-    std::unordered_set<std::string> folders;
-    std::unordered_set<std::string> keys;
-    size_t                          files{};
+    std::unordered_set<std::string>              folders;
+    std::unordered_set<std::string>              keys;
+    std::unordered_map<std::string, EmbeddedPack> packs; // by key
+    size_t                                       files{};
 };
 
 EmbeddedIndex parseIndex(std::string const& text) {
@@ -422,7 +449,9 @@ EmbeddedIndex parseIndex(std::string const& text) {
         auto version = pack.value("version", std::string{});
         if (!isFolderName(folder) || uuid.empty() || version.empty()) continue;
         index.folders.insert(folder);
-        index.keys.insert(packKey(uuid, version));
+        auto key = packKey(uuid, version);
+        index.keys.insert(key);
+        index.packs.insert_or_assign(std::move(key), EmbeddedPack{std::move(uuid), std::move(folder)});
         auto const files = pack.value("files", nlohmann::json(0));
         if (files.is_number_unsigned()) index.files += files.get<size_t>();
     }
@@ -792,7 +821,7 @@ size_t completeServerPacks(std::filesystem::path const& recordDir) {
     }
 }
 
-std::optional<std::filesystem::path> mountReplayPacks(
+std::optional<MountedReplayPacks> mountReplayPacks(
     IResourcePackRepository&     repository,
     ResourcePacksInfoPacketPayload const& info,
     std::filesystem::path const& replayFile
@@ -800,7 +829,7 @@ std::optional<std::filesystem::path> mountReplayPacks(
     auto startedAt = std::chrono::steady_clock::now();
     auto path      = replayFile.string();
     int  zipError  = 0;
-    auto skip = [](std::string_view reason) -> std::optional<std::filesystem::path> {
+    auto skip = [](std::string_view reason) -> std::optional<MountedReplayPacks> {
         getLogger().debug("Replay embeds no resource packs: {}", reason);
         return std::nullopt;
     };
@@ -893,16 +922,40 @@ std::optional<std::filesystem::path> mountReplayPacks(
 
     // Packs the replay does not carry still come from the local cache, copied so the two sources never overlap.
     std::vector<std::pair<std::string, std::filesystem::path>> notEmbedded;
+    std::unordered_set<std::string>                            installed;
     size_t                                                     removed = 0;
     repo.forEachPack([&](ResourcePack const& pack) {
         auto const& manifest = manifestOf(pack);
-        if (!isCacheOrigin(manifest.mPackOrigin) || manifest.mPackType != PackType::Resources) return;
+        if (manifest.mPackType != PackType::Resources) return;
         auto key = packKey(*manifest.mIdentity);
+        if (!isCacheOrigin(manifest.mPackOrigin)) {
+            installed.insert(std::move(key));
+            return;
+        }
         if (!index.keys.contains(key) && announced.contains(key)) {
             notEmbedded.emplace_back(folderFor(key), fullPathOf(*manifest.mLocation));
         }
         ++removed;
     });
+
+    // An encrypted pack's content key is looked up by its uuid, so only unencrypted packs can take a replay uuid.
+    std::unordered_set<std::string> encrypted;
+    for (auto const& pack : *info.mResourcePacks) {
+        if (!pack.mContentKey->empty()) encrypted.insert(packKey(*pack.mPackIdVersion));
+    }
+    MountedReplayPacks mounted{root, {}};
+    for (auto const& [key, pack] : index.packs) {
+        bool const rename = installed.contains(key) && !encrypted.contains(key);
+        // A reused extraction may hold the replay uuid from a load when the installed pack was there.
+        auto const uuid = rename ? replayUuidFor(pack.uuid).asString() : pack.uuid;
+        if (!writeManifestUuid(embedded / pack.folder / "manifest.json", uuid)) {
+            getLogger().warn("Unable to set the uuid of embedded resource pack {}", key);
+            continue;
+        }
+        if (!rename) continue;
+        getLogger().info("Embedded resource pack {} takes uuid {}: a pack installed here has its identity", key, uuid);
+        mounted.renamed.emplace(key, uuid);
+    }
 
     std::vector<PackSource*> kept;
     for (auto* source : sources) {
@@ -944,7 +997,21 @@ std::optional<std::filesystem::path> mountReplayPacks(
         fromLocalCache,
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startedAt).count()
     );
-    return root;
+    return mounted;
+}
+
+void renameReplayPacks(
+    ResourcePacksInfoPacketPayload& info,
+    ResourcePackStackPacketPayload& stack,
+    MountedReplayPacks const&       mounted
+) {
+    if (mounted.renamed.empty()) return;
+    auto const rename = [&](PackIdVersion& identity) {
+        auto const renamed = mounted.renamed.find(packKey(identity));
+        if (renamed != mounted.renamed.end()) identity.mId = mce::UUID::fromString(renamed->second);
+    };
+    for (auto& pack : *info.mResourcePacks) rename(*pack.mPackIdVersion);
+    for (auto& entry : *stack.mTexturePackIdsAndVersions) rename(*entry.mPackId);
 }
 
 void removeMountedPacks(std::filesystem::path const& mountDir) {

@@ -837,20 +837,38 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 {eyeX + controlWidth * 0.5f, rowCentre},
                 eyeHovered ? theme::kIconHighlight : theme::kIconInactive
             );
+            // The save-key button sits beside the eye; a locked track takes no keys, so its lock shows there instead.
+            float const addX = eyeX - controlWidth;
             if (row.locked) {
                 widgets::drawIconAtCentre(
                     drawList,
                     ICON_LOCK,
-                    {eyeX - controlWidth * 0.5f, rowCentre},
+                    {addX + controlWidth * 0.5f, rowCentre},
                     theme::kTextDim
                 );
+            } else {
+                bool const addHovered = contains({addX, rowY}, {eyeX, rowBottom}, mouse);
+                if (addHovered)
+                    widgets::hoverTooltip("playback.refactorEditor.timeline.saveCameraToKeyframe"_tr().c_str());
+                if (allowInput && addHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    EditorAction action{EditorActionType::SaveCameraToKeyframe};
+                    action.id   = row.cameraId;
+                    action.tick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+                    ctx.submitAction(std::move(action));
+                }
+                widgets::drawIconAtCentre(
+                    drawList,
+                    ICON_ADD_KEYFRAME,
+                    {addX + controlWidth * 0.5f, rowCentre},
+                    addHovered ? theme::kIconHighlight : theme::kIconInactive
+                );
             }
-            if (clicked && mouse.x < eyeX) {
+            if (clicked && mouse.x < addX) {
                 ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
                 EditorAction action{EditorActionType::SetPreviewCamera};
                 action.id = row.cameraId;
                 ctx.submitAction(std::move(action));
-            } else if (rowRightClicked && mouse.x < eyeX) {
+            } else if (rowRightClicked && mouse.x < addX) {
                 ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
                 mTrackMenuCameraId = row.cameraId;
                 widgets::openAnchoredPopup("##timeline-track-menu");

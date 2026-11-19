@@ -29,6 +29,12 @@ public:
     static std::unique_ptr<model::IEditCommand> createAddCameraKeyframe(const std::string& id, int tick);
     static std::unique_ptr<model::IEditCommand>
     createAddCameraKeyframe(const std::string& id, int tick, std::optional<model::CameraKeyframe> captured);
+    static std::unique_ptr<model::IEditCommand> createSaveCameraToKeyframe(
+        const std::string&         id,
+        int                        tick,
+        model::CameraKeyframe      pose,
+        std::optional<std::string> subject
+    );
     static std::unique_ptr<model::IEditCommand>
     createMoveCameraKeyframe(const std::string& id, int fromTick, int toTick);
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframe(const std::string& id, int tick);

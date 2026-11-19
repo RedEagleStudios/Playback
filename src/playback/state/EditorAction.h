@@ -50,6 +50,9 @@ enum class EditorActionType {
     TrimWorldActor,
     RippleDeleteWorldActorSegment,
     AddCameraKeyframe,
+    // Writes the live camera into the key at tick, adding it if missing. A person track key also takes the player
+    // the view follows, when it follows one.
+    SaveCameraToKeyframe,
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
     SetKeyframeInterpolation,

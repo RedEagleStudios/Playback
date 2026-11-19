@@ -467,6 +467,7 @@
                 "zoomReset": "重置缩放",
                 "enableTrack": "启用相机轨道",
                 "disableTrack": "停用相机轨道",
+                "saveCameraToKeyframe": "将当前相机保存到播放头处的关键帧",
                 "skipToStart": "跳到开头",
                 "skipToEnd": "跳到结尾",
                 "previousTick": "上一游戏刻",

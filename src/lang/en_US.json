@@ -467,6 +467,7 @@
                 "zoomReset": "Reset zoom",
                 "enableTrack": "Enable camera track",
                 "disableTrack": "Disable camera track",
+                "saveCameraToKeyframe": "Save current camera to the keyframe at the playhead",
                 "skipToStart": "Skip to start",
                 "skipToEnd": "Skip to end",
                 "previousTick": "Previous tick",

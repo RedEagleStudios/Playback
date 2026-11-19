@@ -10,6 +10,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 struct zip;
@@ -18,6 +19,7 @@ class IResourcePackRepository;
 class PackManifest;
 class ResourcePack;
 struct ResourcePacksInfoPacketPayload;
+struct ResourcePackStackPacketPayload;
 
 namespace playback::io::packs {
 
@@ -97,12 +99,25 @@ private:
     std::jthread                    mThread;
 };
 
+struct MountedReplayPacks {
+    std::filesystem::path root;
+    // Embedded packs given a replay uuid because a pack installed here has their identity, by pack key.
+    std::unordered_map<std::string, std::string> renamed;
+};
+
 // Client thread, after addCachedResourcePacks: mounts the embedded packs, plus local cache copies of announced packs
 // the replay lacks, as the only cache pack source. Returns nullopt when the replay embeds no packs.
-[[nodiscard]] std::optional<std::filesystem::path> mountReplayPacks(
+[[nodiscard]] std::optional<MountedReplayPacks> mountReplayPacks(
     IResourcePackRepository&     repository,
     ResourcePacksInfoPacketPayload const& info,
     std::filesystem::path const&          replayFile
+);
+
+// Points the recorded pack list and stack entries for renamed packs at their replay uuid.
+void renameReplayPacks(
+    ResourcePacksInfoPacketPayload& info,
+    ResourcePackStackPacketPayload& stack,
+    MountedReplayPacks const&       mounted
 );
 
 // Keeps the extraction in the cache for the next load of the same replay, or deletes it.
