@@ -311,6 +311,21 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick), mProject);
         }
         break;
+    case EditorActionType::SaveCameraToKeyframe: {
+        auto captured = captureCameraKeyframe();
+        if (!captured) {
+            logger().debug("Camera keyframe capture unavailable (camera={}, tick={})", action.id, action.tick);
+            break;
+        }
+        auto const&                session = replay::ReplaySession::getInstance();
+        std::optional<std::string> subject;
+        if (session.isFollowViewActive()) subject = session.replaySubjectChoice();
+        mCommandStack.push(
+            CommandFactory::createSaveCameraToKeyframe(action.id, action.tick, std::move(*captured), std::move(subject)),
+            mProject
+        );
+        break;
+    }
     case EditorActionType::MoveCameraKeyframe:
         mCommandStack.push(
             CommandFactory::createMoveCameraKeyframe(action.id, action.tick, action.secondaryTick),

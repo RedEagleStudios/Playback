@@ -144,6 +144,29 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
+// Writes the live camera into the key at `tick`, keeping its interpolation and easing, or adds the key if missing.
+// `subject` sets a person track key's subject; nullopt keeps it (a new key inherits the previous key's subject).
+class SaveCameraToKeyframe final : public model::IEditCommand {
+public:
+    SaveCameraToKeyframe(
+        std::string                cameraId,
+        int                        tick,
+        model::CameraKeyframe      pose,
+        std::optional<std::string> subject
+    );
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    model::CameraKeyframe                mPose;
+    std::optional<std::string>           mSubject;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
 class MoveKeyframe final : public model::IEditCommand {
 public:
     MoveKeyframe(std::string cameraId, int fromTick, int toTick);

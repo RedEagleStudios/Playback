@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Each camera track row has a save-keyframe button beside its eye. It writes the current camera into the track's key at the playhead, keeping that key's interpolation and easing, or adds the key when there is none. On a first- or third-person track the key also takes the player the view follows, when it follows one. Locked tracks show their lock there instead. One undo step.
+
 ### Fixed
 
 - Recorded player positions and replay player lists no longer drop players during respawn or when another entity reuses their runtime ID.
