@@ -4,7 +4,9 @@
 #include "playback/editor/ui/components/EasingCurveEditor.h"
 #include "playback/editor/ui/components/EasingPresetPicker.h"
 #include "playback/editor/ui/components/KeyframeControls.h"
+#include "playback/editor/ui/components/OverlayEditing.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
+#include "playback/editor/ui/components/StandInDraft.h"
 #include "playback/editor/ui/components/PropertyControls.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
@@ -182,10 +184,28 @@ void DetailsPanel::draw(PanelContext const& ctx) {
     ImGui::SetCursorScreenPos({origin.x + railW, origin.y});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {theme::kPanelPadding, theme::kPanelPadding});
     ImGui::BeginChild("##InspectorBody", {std::max(1.0f, avail.x - railW), avail.y}, false);
+    // The Stand-in page marks its In and Out on the Replay lane only while it is open.
+    if (mPage != mShownPage) {
+        auto& draft  = standInDraft();
+        draft.active = mPage == InspectorPage::StandIn;
+        if (draft.active) {
+            // Opening it brings up the Replay layer, with a few seconds from the playhead marked to start from.
+            ctx.selection.select(state::editing::model::SelectedWorldActor{});
+            int const total = std::max(1, ctx.state.totalTicks);
+            if (draft.in < 0 || draft.out <= draft.in || draft.out > total) {
+                draft.in  = std::clamp(ctx.state.currentTick, 0, total - 1);
+                draft.out = std::min(total, draft.in + 100);
+            }
+        }
+        mShownPage = mPage;
+    }
     if (!ctx.state.project) {
         widgets::noActiveProjectPlaceholder();
     } else {
         switch (mPage) {
+        case InspectorPage::StandIn:
+            drawStandInPage(ctx);
+            break;
         case InspectorPage::Selection:
             drawSelectionPage(ctx);
             break;
@@ -219,6 +239,7 @@ void DetailsPanel::drawRail(PanelContext const& ctx, float width, float height) 
     bool const       exportActive = exporting::isExportActive(ctx.state.exportStatus.state);
     std::array const entries{
         Entry{InspectorPage::Selection, ICON_PANEL_LEFT, "playback.refactorEditor.inspector.selection"_tr(), true},
+        Entry{InspectorPage::StandIn,   ICON_STANDIN,    "playback.refactorEditor.standIn.title"_tr(),       true},
         Entry{InspectorPage::Export,    ICON_EXPORT,     "playback.refactorEditor.inspector.export"_tr(),    true},
         Entry{InspectorPage::Preview,   ICON_EYE,        "playback.refactorEditor.inspector.preview"_tr(),   true},
         Entry{InspectorPage::Settings,  ICON_SETTINGS,   "playback.refactorEditor.inspector.settings"_tr(),  true},
@@ -1215,6 +1236,108 @@ void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {
                 ctx.commands.setVideoAspectRatio(preset.ratio);
         }
         property::endSection();
+    }
+}
+
+void DetailsPanel::drawStandInPage(PanelContext const& ctx) {
+    auto const* project = ctx.project();
+    auto&       draft   = standInDraft();
+    int const   total   = std::max(1, ctx.state.totalTicks);
+    property::beginInspector(
+        "playback.refactorEditor.standIn.title"_tr(),
+        "playback.refactorEditor.standIn.subtitle"_tr()
+    );
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.standIn.hint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+
+    // A hire finishes on the controller's next tick: the new layer is selected, or the reason it failed shows.
+    if (!mHireId.empty() && ctx.state.standInHireSerial != mHireSerial) {
+        mHireError = ctx.state.standInError;
+        if (mHireError.empty()) {
+            ctx.selection.select(state::editing::model::SelectedOverlay{mHireId});
+            mPage = InspectorPage::Selection;
+        }
+        mHireId.clear();
+    }
+
+    if (property::beginSection((ICON_USER "  " + "playback.refactorEditor.standIn.source"_tr()).c_str())) {
+        widgets::fieldLabel(nullptr, playerSubjectLabel(ctx.state.replayPlayers, draft.subject).c_str());
+        PlayerPickerResult picked;
+        if (drawPlayerList(
+                "##standin-players",
+                PlayerPickerMode::SegmentSubject,
+                ctx.state.replayPlayers,
+                draft.subject,
+                false,
+                picked
+            )
+            && picked.picked) {
+            draft.subject = picked.uuid;
+        }
+        property::endSection();
+    }
+
+    if (property::beginSection((ICON_FILM "  " + "playback.refactorEditor.standIn.range"_tr()).c_str())) {
+        // In and Out are recording time; they also drag on the Replay lane while this page is open.
+        constexpr float ticksPerSecond = static_cast<float>(widgets::kTicksPerSecond);
+        auto const      mark           = [&](char const* id, char const* icon, std::string const& label, int& tick, int low,
+                                int high) {
+            widgets::fieldLabel(icon, label.c_str());
+            float seconds = static_cast<float>(tick) / ticksPerSecond;
+            ImGui::SetNextItemWidth(-1.0f);
+            if (widgets::dragFloat(id, &seconds, low / ticksPerSecond, high / ticksPerSecond, "%.2f s", 0.05f)) {
+                tick = std::clamp(static_cast<int>(std::lround(seconds * ticksPerSecond)), low, high);
+            }
+        };
+        mark("##standin-in", ICON_MARK_IN, "playback.refactorEditor.standIn.in"_tr(), draft.in, 0, std::max(0, draft.out - 1));
+        mark("##standin-out", ICON_MARK_OUT, "playback.refactorEditor.standIn.out"_tr(), draft.out, draft.in + 1, total);
+        if (property::actionButton((ICON_MARK_IN "  " + "playback.refactorEditor.standIn.inAtPlayhead"_tr()).c_str())) {
+            draft.in = std::clamp(ctx.state.currentTick, 0, total - 1);
+            if (draft.out <= draft.in) draft.out = std::min(total, draft.in + 100);
+        }
+        if (property::actionButton((ICON_MARK_OUT "  " + "playback.refactorEditor.standIn.outAtPlayhead"_tr()).c_str())) {
+            draft.out = std::clamp(ctx.state.currentTick, 1, total);
+            if (draft.in >= draft.out) draft.in = std::max(0, draft.out - 100);
+        }
+        ImGui::TextDisabled(
+            "%s",
+            "playback.refactorEditor.standIn.length"_tr(widgets::formatTick(std::max(0, draft.out - draft.in))).c_str()
+        );
+        property::endSection();
+    }
+
+    bool const hiring = !mHireId.empty();
+    ImGui::BeginDisabled(hiring || !project || draft.out <= draft.in);
+    if (property::actionButton(
+            hiring ? (ICON_HIRE "  " + "playback.refactorEditor.standIn.hiring"_tr()).c_str()
+                   : (ICON_HIRE "  " + "playback.refactorEditor.standIn.hire"_tr()).c_str()
+        )) {
+        // The layer plays the marked stretch where it was recorded; it is moved from there on the timeline.
+        auto item               = overlays::makeLayer(*project, editing::model::OverlayKind::StandIn, draft.in);
+        item.endTick            = draft.out;
+        item.standIn.subject    = draft.subject;
+        item.standIn.subjectLabel = playerSubjectLabel(ctx.state.replayPlayers, draft.subject);
+        item.standIn.sourceTick = draft.in;
+        auto layers             = project->overlays;
+        layers.push_back(item);
+        EditorAction action{EditorActionType::HireStandIn};
+        action.id       = draft.subject;
+        action.tick     = draft.in;
+        action.kind     = draft.out;
+        action.overlays = std::move(layers);
+        ctx.submitAction(std::move(action));
+        mHireId     = item.id;
+        mHireSerial = ctx.state.standInHireSerial;
+        mHireError.clear();
+    }
+    ImGui::EndDisabled();
+    if (!mHireError.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::kError);
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(mHireError.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
     }
 }
 

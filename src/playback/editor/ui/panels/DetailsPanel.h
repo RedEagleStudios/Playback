@@ -12,7 +12,7 @@
 
 namespace playback::editor::ui {
 
-enum class InspectorPage { Selection, Export, Preview, Settings };
+enum class InspectorPage { Selection, StandIn, Export, Preview, Settings };
 
 class DetailsPanel {
 public:
@@ -27,6 +27,8 @@ private:
     void drawExportPage(PanelContext const& ctx);
     void drawPreviewPage(PanelContext const& ctx);
     void drawSettingsPage(PanelContext const& ctx);
+    // Hire a Stand-in: the player and the In/Out of the recording to take (marked on the Replay lane), then Hire.
+    void drawStandInPage(PanelContext const& ctx);
     void drawOptiPistonSection();
     void drawWorldSection(PanelContext const& ctx);
     // The Rendered pack's own options, laid out by its screens; values are saved in the project.
@@ -63,6 +65,12 @@ private:
     void drawOverview(PanelContext const& ctx);
 
     InspectorPage        mPage{InspectorPage::Selection};
+    // The page the rail showed last frame, so entering and leaving the Stand-in page can switch its marks on and off.
+    InspectorPage        mShownPage{InspectorPage::Selection};
+    // A hire on its way: the new layer's id and the hire serial before it; the last failure's reason.
+    std::string          mHireId;
+    int                  mHireSerial{};
+    std::string          mHireError;
     LayerInspector       mLayerInspector;
     std::optional<float> mPistonDurationDraft;
     // The World section's settings while a slider or colour is dragged; committed as one undo step on release.

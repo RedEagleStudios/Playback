@@ -26,6 +26,7 @@ private:
     void drawModelSection(state::editing::model::OverlayItem& item);
     void drawBlurSection(state::editing::model::OverlayItem& item);
     void drawLightSection(state::editing::model::OverlayItem& item);
+    void drawStandInSection(PanelContext const& ctx, state::editing::model::OverlayItem& item);
 
     // A keyable number of the layer: its diamond keys it at the playhead, which is mLocalTick into the layer.
     void keyRow(
@@ -54,6 +55,8 @@ private:
     std::string            mModelError;
     std::string            mModelErrorFile;
     VanillaPicker          mVanillaPicker;
+    std::array<char, 64>   mNameTagBuffer{};
+    std::array<char, 96>   mMobBuffer{};
 };
 
 } // namespace playback::editor::ui

@@ -5,6 +5,7 @@
 #include "playback/editor/ui/components/KeyframeControls.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/OverlayEditing.h"
+#include "playback/editor/ui/components/StandInDraft.h"
 #include "playback/editor/ui/components/TimelineScale.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
@@ -104,6 +105,8 @@ ImU32 layerColor(state::editing::model::OverlayKind kind) {
         return theme::kLayerBlur;
     case state::editing::model::OverlayKind::Light:
         return theme::kLayerLight;
+    case state::editing::model::OverlayKind::StandIn:
+        return theme::kLayerStandIn;
     }
     return theme::kLayerTitle;
 }
@@ -2652,6 +2655,21 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             };
 
             if (replayLane) {
+                // While the Stand-in page is open its In and Out sit on this lane; grabbing one beats the segments.
+                auto&       draft   = standInDraft();
+                float const inX     = scale.xAt(static_cast<float>(draft.in));
+                float const outX    = scale.xAt(static_cast<float>(draft.out));
+                float const grabbed = 6.0f * metrics::scale();
+                if (draft.active && allowInput && !clickConsumed && mStandInDrag == 0
+                    && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse.y >= y && mouse.y <= rowBottom) {
+                    if (std::abs(mouse.x - inX) <= grabbed) mStandInDrag = 1;
+                    else if (std::abs(mouse.x - outX) <= grabbed) mStandInDrag = 2;
+                    if (mStandInDrag != 0) clickConsumed = true;
+                }
+                if (draft.active && mStandInDrag == 0 && mouse.y >= y && mouse.y <= rowBottom
+                    && (std::abs(mouse.x - inX) <= grabbed || std::abs(mouse.x - outX) <= grabbed)) {
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                }
                 auto const* selectedSegment = ctx.selection.getAs<state::editing::model::SelectedWorldActorSegment>();
                 // A cut is the empty stretch between two segments; it is hatched so it reads as removed.
                 int lastEnd = 0;
@@ -2687,6 +2705,26 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         layout.fullMax.x
                     );
                     barHit(x0, x1, segment.id, segment.startTick, segment.endTick, segment.locked);
+                }
+                if (draft.active) {
+                    // The marked stretch: tinted, with a flag at each end.
+                    ImU32 const tone = theme::kLayerStandIn;
+                    drawList->AddRectFilled(
+                        {std::max(inX, layout.canvasLeft), y + 1.0f},
+                        {std::min(outX, layout.fullMax.x), rowBottom - 1.0f},
+                        theme::withAlpha(tone, 0x50)
+                    );
+                    for (auto const& [x, isIn] : {std::pair{inX, true}, std::pair{outX, false}}) {
+                        if (x < layout.canvasLeft - 8.0f || x > layout.fullMax.x + 8.0f) continue;
+                        drawList->AddLine({x, y}, {x, rowBottom}, tone, 2.0f * metrics::scale());
+                        widgets::drawIconAtCentre(
+                            drawList,
+                            isIn ? ICON_MARK_IN : ICON_MARK_OUT,
+                            {x + (isIn ? 7.0f : -7.0f) * metrics::scale(), y + 8.0f * metrics::scale()},
+                            tone,
+                            std::floor(metrics::font() * 0.9f)
+                        );
+                    }
                 }
             } else if (auto const* item = overlays::find(*project, row.overlayId)) {
                 auto const* selectedLayer = ctx.selection.getAs<state::editing::model::SelectedOverlay>();
@@ -2766,6 +2804,19 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         int const raw = tickFromMouse();
         return shiftSnap ? snapToEditPoints(ctx, raw, scale.pixelsPerTick, true, true, skipKey, {}) : snapTick(raw);
     };
+
+    // The Stand-in page's In or Out follows the mouse while held.
+    if (mStandInDrag != 0) {
+        auto& draft = standInDraft();
+        if (!allowInput || !draft.active || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            mStandInDrag = 0;
+        } else {
+            int const target = std::clamp(dragTarget([](std::string const&, int) { return false; }), 0, state.totalTicks);
+            if (mStandInDrag == 1) draft.in = std::min(target, draft.out - 1);
+            else draft.out = std::max(target, draft.in + 1);
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        }
+    }
 
     // A property key follows the mouse while held and lands on release; a click without movement seeks to it.
     if (allowInput && !mChannelDragRow.empty()) {

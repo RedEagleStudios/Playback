@@ -1001,9 +1001,11 @@ private:
     case OverlayKind::Title: return !item.title.text.empty() && item.title.fontSize > 0.0f;
     case OverlayKind::Shape: return item.transform.width > 0.0f && item.transform.height > 0.0f;
     case OverlayKind::Model: return !item.model.file.empty();
-    // Blurs and lights act on the rendered picture on the GPU (BlurEffects), not in this image.
+    // Blurs and lights act on the rendered picture on the GPU (BlurEffects), not in this image; Stand-ins are
+    // characters in the replay world.
     case OverlayKind::Blur:
-    case OverlayKind::Light: return false;
+    case OverlayKind::Light:
+    case OverlayKind::StandIn: return false;
     }
     return false;
 }

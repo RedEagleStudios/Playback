@@ -532,6 +532,21 @@ json toJson(OverlayItem const& item) {
              {"filter", json::array({item.light.filter[0], item.light.filter[1], item.light.filter[2]})},
              {"spread", item.light.spread},
          }                                             },
+        {"standIn",
+         json{
+             {"subject", item.standIn.subject},
+             {"subjectLabel", item.standIn.subjectLabel},
+             {"sourceTick", item.standIn.sourceTick},
+             {"look", static_cast<int>(item.standIn.look)},
+             {"skinPlayer", item.standIn.skinPlayer},
+             {"skinFile", item.standIn.skinFile},
+             {"slim", item.standIn.slim},
+             {"mob", item.standIn.mob},
+             {"nameTag", item.standIn.nameTag},
+             {"offset", toJson(item.standIn.offset)},
+             {"turn", item.standIn.turn},
+             {"blocks", item.standIn.blocks},
+         }                                             },
         {"channels",     toJson(item.channels)         },
     };
 }
@@ -540,7 +555,7 @@ OverlayItem overlayFrom(json const& node) {
     OverlayItem item;
     item.id           = stringOr(node, "id");
     item.name         = stringOr(node, "name");
-    item.kind         = enumOr(node, "kind", item.kind, static_cast<int>(OverlayKind::Light));
+    item.kind         = enumOr(node, "kind", item.kind, static_cast<int>(OverlayKind::StandIn));
     item.startTick    = std::max(0, intOr(node, "startTick", item.startTick));
     item.endTick      = std::max(item.startTick + 1, intOr(node, "endTick", item.endTick));
     item.fadeInTicks  = std::max(0, intOr(node, "fadeInTicks", 0));
@@ -620,6 +635,21 @@ OverlayItem overlayFrom(json const& node) {
                 }
             }
         }
+    }
+    if (auto const* standIn = objectAt(node, "standIn")) {
+        auto& out        = item.standIn;
+        out.subject      = stringOr(*standIn, "subject");
+        out.subjectLabel = stringOr(*standIn, "subjectLabel");
+        out.sourceTick   = std::max(0, intOr(*standIn, "sourceTick", 0));
+        out.look         = enumOr(*standIn, "look", out.look, static_cast<int>(StandInLook::Mob));
+        out.skinPlayer   = stringOr(*standIn, "skinPlayer");
+        out.skinFile     = stringOr(*standIn, "skinFile");
+        out.slim         = boolOr(*standIn, "slim", false);
+        if (auto mob = stringOr(*standIn, "mob"); !mob.empty()) out.mob = std::move(mob);
+        out.nameTag = stringOr(*standIn, "nameTag");
+        out.offset  = vec3From(*standIn, "offset", out.offset);
+        out.turn    = finiteOr(*standIn, "turn", out.turn);
+        out.blocks  = boolOr(*standIn, "blocks", false);
     }
     item.channels = channelsFrom(node, "channels");
     return item;

@@ -12,10 +12,10 @@
 namespace playback::state::editing::model {
 
 // A layer over the replay picture, in the preview and in every export: a title, a shape, a model placed in the world
-// (a Mine-imator file, or a Minecraft block or item), a blur of the picture, or a light on it. Items later in
-// EditorStateExt::overlays draw on top of earlier ones; blurs and lights act on the replay picture, in layer order, under
-// every title, shape and model.
-enum class OverlayKind : uint8_t { Title, Shape, Model, Blur, Light };
+// (a Mine-imator file, or a Minecraft block or item), a blur of the picture, a light on it, or a Stand-in (a recorded
+// player's actions played again by another character). Items later in EditorStateExt::overlays draw on top of earlier
+// ones; blurs and lights act on the replay picture, in layer order, under every title, shape and model.
+enum class OverlayKind : uint8_t { Title, Shape, Model, Blur, Light, StandIn };
 
 // Polygon: a regular polygon of `points` corners (3 is a triangle; many approach a circle).
 enum class ShapeKind : uint8_t { Rectangle, Ellipse, Polygon };
@@ -135,6 +135,38 @@ struct LightSettings {
     bool operator==(LightSettings const&) const = default;
 };
 
+// How a Stand-in looks: the source player's own skin, another recorded player's skin, a skin image (64x64 or 64x32
+// PNG), or a mob of any entity type.
+enum class StandInLook : uint8_t { SameSkin, PlayerSkin, SkinFile, Mob };
+
+// A Stand-in plays a recorded player's actions (movement, turning, swings, what they hold and wear, and optionally the
+// blocks they changed) again as another character, so one player can fill a scene with many. The layer's start plays
+// the recording at `sourceTick`; each tick after it plays the next recorded tick.
+struct StandInSettings {
+    // The recorded player whose actions it plays: their UUID, empty for the player who recorded (as the follow list
+    // names them), and their name when it was chosen.
+    std::string subject;
+    std::string subjectLabel;
+    int         sourceTick{};
+    StandInLook look{StandInLook::SameSkin};
+    // PlayerSkin: the recorded player whose skin it wears (UUID, empty for the recorder).
+    std::string skinPlayer;
+    // SkinFile: an absolute path to a skin image; `slim` uses the thin-armed (Alex) model.
+    std::string skinFile;
+    bool        slim{};
+    // Mob: an entity type such as "minecraft:zombie".
+    std::string mob{"minecraft:zombie"};
+    // Shown over its head; empty shows none.
+    std::string nameTag;
+    // Where it plays: moved by `offset` blocks and turned `turn` degrees about where the source stood at sourceTick.
+    Vec3  offset{};
+    float turn{};
+    // Also places and breaks the blocks the source changed within reach, at the Stand-in's time and place.
+    bool blocks{};
+
+    bool operator==(StandInSettings const&) const = default;
+};
+
 struct OverlayItem {
     std::string id;
     std::string name;
@@ -153,6 +185,7 @@ struct OverlayItem {
     ModelPlacement   model;
     BlurSettings     blur;
     LightSettings    light;
+    StandInSettings  standIn;
     // Keyed numeric properties (overlayProperty names), each on its own. Key ticks count from startTick, so moving
     // the layer moves its keys with it.
     ValueChannels channels;
@@ -207,6 +240,10 @@ struct OverlayItem {
     if (name == "lightFilterG") return &item.light.filter[1];
     if (name == "lightFilterB") return &item.light.filter[2];
     if (name == "lightSpread") return &item.light.spread;
+    if (name == "standInX") return &item.standIn.offset.x;
+    if (name == "standInY") return &item.standIn.offset.y;
+    if (name == "standInZ") return &item.standIn.offset.z;
+    if (name == "standInTurn") return &item.standIn.turn;
     return nullptr;
 }
 
@@ -223,11 +260,13 @@ struct OverlayItem {
     return result;
 }
 
-// Moves only the layer's start edge: its keys stay where they are on the timeline, so they shift within the layer.
+// Moves only the layer's start edge: its keys stay where they are on the timeline, so they shift within the layer. A
+// Stand-in's recording moves with the edge too, as trimming a clip does, so what plays at every other tick is unchanged.
 inline void setOverlayStart(OverlayItem& item, int startTick) {
     int const shift = startTick - item.startTick;
     item.startTick  = startTick;
     if (shift == 0) return;
+    if (item.kind == OverlayKind::StandIn) item.standIn.sourceTick = std::max(0, item.standIn.sourceTick + shift);
     for (auto& [name, channel] : item.channels) {
         ValueChannel moved;
         for (auto const& [tick, key] : channel) moved.emplace(tick - shift, key);

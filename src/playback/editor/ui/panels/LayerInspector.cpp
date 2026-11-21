@@ -3,6 +3,7 @@
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/KeyframeControls.h"
 #include "playback/editor/ui/components/OverlayEditing.h"
+#include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/PropertyControls.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/overlay/MimodelRenderer.h"
@@ -107,6 +108,8 @@ bool LayerInspector::draw(PanelContext const& ctx) {
         mBufferItemId = stored->id;
         copyInto(mNameBuffer, stored->name);
         copyInto(mTextBuffer, stored->title.text);
+        copyInto(mNameTagBuffer, stored->standIn.nameTag);
+        copyInto(mMobBuffer, stored->standIn.mob);
     }
 
     OverlayItem item   = mDraft ? *mDraft : *stored;
@@ -134,6 +137,9 @@ bool LayerInspector::draw(PanelContext const& ctx) {
         break;
     case OverlayKind::Light:
         drawLightSection(item);
+        break;
+    case OverlayKind::StandIn:
+        drawStandInSection(ctx, item);
         break;
     }
     ImGui::EndDisabled();
@@ -424,6 +430,119 @@ void LayerInspector::drawLightSection(OverlayItem& item) {
     }
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", "playback.refactorEditor.layers.lightHint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+    property::endSection();
+}
+
+void LayerInspector::drawStandInSection(PanelContext const& ctx, OverlayItem& item) {
+    using state::editing::model::StandInLook;
+    auto& standIn = item.standIn;
+    if (!property::beginSection((ICON_STANDIN "  " + "playback.refactorEditor.standIn.title"_tr()).c_str())) return;
+
+    // What it plays: the source player from the recording's sourceTick, one recorded tick per tick of the layer.
+    label("playback.refactorEditor.standIn.source"_tr());
+    ImGui::TextUnformatted(
+        (standIn.subjectLabel.empty() ? playerSubjectLabel(ctx.state.replayPlayers, standIn.subject) : standIn.subjectLabel)
+            .c_str()
+    );
+    int source = standIn.sourceTick;
+    if (seconds("playback.refactorEditor.standIn.sourceStart"_tr(), "##standin-source", source, 0, std::max(0, ctx.state.totalTicks - 1))) {
+        standIn.sourceTick = source;
+    }
+    widgets::itemTooltip("playback.refactorEditor.standIn.sourceStartHint"_tr().c_str());
+
+    label("playback.refactorEditor.standIn.look"_tr());
+    std::string const looks[] = {
+        "playback.refactorEditor.standIn.lookSame"_tr(),
+        "playback.refactorEditor.standIn.lookPlayer"_tr(),
+        "playback.refactorEditor.standIn.lookFile"_tr(),
+        "playback.refactorEditor.standIn.lookMob"_tr(),
+    };
+    int look = static_cast<int>(standIn.look);
+    if (widgets::beginCombo("##standin-look", looks[std::clamp(look, 0, 3)].c_str())) {
+        for (int index = 0; index < 4; ++index) {
+            if (ImGui::Selectable(looks[index].c_str(), index == look)) standIn.look = static_cast<StandInLook>(index);
+        }
+        widgets::endCombo();
+    }
+    switch (standIn.look) {
+    case StandInLook::SameSkin:
+        break;
+    case StandInLook::PlayerSkin: {
+        label("playback.refactorEditor.standIn.skinOf"_tr(playerSubjectLabel(ctx.state.replayPlayers, standIn.skinPlayer)));
+        PlayerPickerResult picked;
+        if (drawPlayerList(
+                "##standin-skin-player",
+                PlayerPickerMode::SegmentSubject,
+                ctx.state.replayPlayers,
+                standIn.skinPlayer,
+                false,
+                picked
+            )
+            && picked.picked) {
+            standIn.skinPlayer = picked.uuid;
+        }
+        break;
+    }
+    case StandInLook::SkinFile:
+        label("playback.refactorEditor.standIn.skinFile"_tr());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(standIn.skinFile.empty() ? "-" : standIn.skinFile.c_str());
+        ImGui::PopTextWrapPos();
+        if (property::actionButton("playback.refactorEditor.layers.browse"_tr().c_str())) {
+            if (auto const file = overlays::pickSkinFile()) standIn.skinFile = *file;
+        }
+        toggle("##standin-slim", ICON_USER, "playback.refactorEditor.standIn.slim"_tr(), standIn.slim);
+        break;
+    case StandInLook::Mob: {
+        label("playback.refactorEditor.standIn.mob"_tr());
+        // Common mobs to pick from; any entity type can be typed.
+        static constexpr std::array<char const*, 20> Mobs{
+            "minecraft:zombie",        "minecraft:skeleton",  "minecraft:creeper",  "minecraft:spider",
+            "minecraft:enderman",      "minecraft:villager_v2", "minecraft:iron_golem", "minecraft:pillager",
+            "minecraft:vindicator",    "minecraft:witch",     "minecraft:piglin",   "minecraft:wither_skeleton",
+            "minecraft:husk",          "minecraft:drowned",   "minecraft:wolf",     "minecraft:fox",
+            "minecraft:pig",           "minecraft:cow",       "minecraft:sheep",    "minecraft:allay",
+        };
+        if (widgets::beginCombo("##standin-mob", standIn.mob.c_str())) {
+            for (char const* mob : Mobs) {
+                if (ImGui::Selectable(mob, standIn.mob == mob)) {
+                    standIn.mob = mob;
+                    copyInto(mMobBuffer, standIn.mob);
+                }
+            }
+            widgets::endCombo();
+        }
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputTextWithHint("##standin-mob-id", "minecraft:zombie", mMobBuffer.data(), mMobBuffer.size())
+            && mMobBuffer[0] != '\0') {
+            standIn.mob = mMobBuffer.data();
+        }
+        break;
+    }
+    }
+
+    label("playback.refactorEditor.standIn.nameTag"_tr());
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::InputTextWithHint(
+            "##standin-name-tag",
+            "playback.refactorEditor.standIn.nameTagHint"_tr().c_str(),
+            mNameTagBuffer.data(),
+            mNameTagBuffer.size()
+        )) {
+        standIn.nameTag = mNameTagBuffer.data();
+    }
+
+    // Where it plays, from where the source stood: moved in blocks and turned about that spot.
+    keyRow(item, "standin-x", ICON_POSITION, "playback.refactorEditor.standIn.offsetX"_tr(), "standInX", 0.0f, 0.0f, "%+.2f");
+    keyRow(item, "standin-y", ICON_POSITION, "playback.refactorEditor.standIn.offsetY"_tr(), "standInY", 0.0f, 0.0f, "%+.2f");
+    keyRow(item, "standin-z", ICON_POSITION, "playback.refactorEditor.standIn.offsetZ"_tr(), "standInZ", 0.0f, 0.0f, "%+.2f");
+    keyRow(item, "standin-turn", ICON_ROTATE, "playback.refactorEditor.standIn.turn"_tr(), "standInTurn", -180.0f, 180.0f, "%.1f°");
+    toggle("##standin-blocks", ICON_VANILLA, "playback.refactorEditor.standIn.blocks"_tr(), standIn.blocks);
+    widgets::itemTooltip("playback.refactorEditor.standIn.blocksHint"_tr().c_str());
+
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.standIn.layerHint"_tr().c_str());
     ImGui::PopTextWrapPos();
     property::endSection();
 }

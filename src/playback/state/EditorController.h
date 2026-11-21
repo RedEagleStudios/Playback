@@ -74,6 +74,9 @@ private:
     std::optional<std::pair<std::string, state::editing::model::CameraProperties>> mCameraPreview;
     // Whether the running export's frame aspect has been handed to the blur pass.
     bool mBlurExportAspectSet{};
+    // The last Hire Stand-in's outcome, published as EditorState::standInHireSerial / standInError.
+    int         mStandInHireSerial{};
+    std::string mStandInError;
     int                                            mProjectTotalTicks{-1};
     bool                                           mExportTickedBeforeClientUpdate{};
     bool                                           mExportTickReentered{};

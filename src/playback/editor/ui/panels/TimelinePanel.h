@@ -180,6 +180,8 @@ private:
     bool        mChannelDragMoved{};
     std::string mChannelMenuRow;
     int         mChannelMenuKey{};
+    // The Stand-in page's mark being dragged on the Replay lane: 0 none, 1 In, 2 Out.
+    int mStandInDrag{};
     // 0 none, 1 in marker, 2 out marker.
     int         mExportMarkerDrag{};
     std::string mDraggingKeyframeCameraId;

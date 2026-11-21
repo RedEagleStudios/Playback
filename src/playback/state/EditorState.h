@@ -55,6 +55,9 @@ struct EditorState {
     ProjectPersistenceState                                      persistence;
     exporting::ExportStatus                                      exportStatus;
     ReplayBrowserState                                           browser;
+    // The last Hire Stand-in: counts up once per attempt; `standInError` says why it failed, empty when it worked.
+    int                                                          standInHireSerial{};
+    std::string                                                  standInError;
 };
 
 } // namespace playback::state

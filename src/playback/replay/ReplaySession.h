@@ -4,6 +4,7 @@
 #include "playback/keyframe/FollowCamera.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ClientVisualOverrides.h"
+#include "playback/state/editing/models/OverlayItem.h"
 #include "playback/state/editing/models/PoseClip.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
@@ -62,6 +63,14 @@ using playback::io::ReplayWriter;
 using playback::record::PlaybackChunkMeta;
 using playback::record::PlaybackMeta;
 using playback::record::PlaybackView;
+
+struct StandInActor;
+struct StandInPacket;
+struct StandInPose;
+struct StandInRecording;
+struct StandInRoster;
+struct StandInRuntime;
+struct StandInSource;
 
 using SteadyTimePoint = std::chrono::steady_clock::time_point;
 
@@ -464,6 +473,13 @@ private:
     // The project's pose clips (setPoseClips), and what each playing one has done to its player.
     std::vector<state::editing::model::PoseClip> mPoseClips;
     std::unique_ptr<PoseClipRuntime>             mPoseRuntime;
+    // The project's Stand-ins (setStandIns), what the recording says about their sources, and their characters.
+    std::unique_ptr<StandInRuntime> mStandIns;
+    // When each recorded player is in the recording, for any thread (standInSourceSpan). Filled with the roster.
+    mutable std::mutex                                    mStandInSpansMutex;
+    std::unordered_map<std::string, std::pair<int, int>> mStandInSpans;
+    bool                                                  mStandInSpansReady{};
+    mutable std::atomic<bool>                             mStandInSpansWanted{false};
 
 public:
     bool mIsProcessingSnapshot = false;
@@ -667,6 +683,44 @@ private:
     void refreshReplayEntityList();
     // Reads the followed actor's flags once per replay tick. snap drops the smoothed eye offset immediately.
     void updateReplaySubjectPosture(bool snap);
+    // Stand-ins. updateStandIns runs once per replay tick (advanced, also in a seek's catch-up, where only blocks go in)
+    // and once per client tick, where it only acts on what changed: edited layers, a seek's landing, a lost character.
+    void updateStandIns(bool advanced);
+    // Despawns what an edit made stale and notes which blocks must go in again; returns the ids of changed layers.
+    [[nodiscard]] std::unordered_set<std::string> reconcileStandIns();
+    [[nodiscard]] StandInRuntime&                 standInRuntime();
+    [[nodiscard]] StandInRecording                standInRecording() const;
+    StandInRoster const&                          standInRoster();
+    // Null when the recording has no such player; `error` then says why.
+    StandInSource const* standInSource(std::string const& subject, std::string* error = nullptr);
+    // Where the source stood when the layer starts: the turn's centre.
+    [[nodiscard]] std::optional<::Vec3>
+    standInPivot(state::editing::model::OverlayItem const& layer, StandInSource const& source) const;
+    // Puts the blocks the layer's source changed at layer ticks [fromTick, toTick] in, where the layer stands.
+    void replayStandInBlocks(state::editing::model::OverlayItem const& layer, int fromTick, int toTick);
+    [[nodiscard]] Actor* spawnStandIn(
+        state::editing::model::OverlayItem const& layer,
+        StandInSource const&                      source,
+        StandInActor&                             actor,
+        StandInPose const&                        pose
+    );
+    [[nodiscard]] std::shared_ptr<Packet> standInPlayerList(
+        state::editing::model::StandInSettings const& settings,
+        StandInActor const&                           actor
+    );
+    void placeStandIn(Actor& actor, StandInActor const& standIn, StandInPose const& pose, bool snap);
+    // Puts on what the source wore and held, and its flags, as of `sourceTick`.
+    void dressStandIn(StandInSource const& source, StandInActor const& actor, int sourceTick, bool showName);
+    void despawnStandIn(StandInActor& actor);
+    void despawnStandIns();
+    void sendStandInPacket(std::shared_ptr<Packet> packet);
+    // A recorded packet of the source, pointed at the Stand-in.
+    void sendStandInRecorded(
+        StandInPacket const& recorded,
+        StandInSource const& source,
+        StandInActor const&  actor,
+        bool                 showName
+    );
 
 public:
     // globalPacks: the project's global resource packs for this replay, top priority first; nullopt keeps the
@@ -728,6 +782,16 @@ public:
     void setPoseClips(std::vector<state::editing::model::PoseClip> const& clips) {
         if (mPoseClips != clips) mPoseClips = clips;
     }
+    // The project's Stand-in layers (the overlays of kind StandIn are kept, the rest ignored). Called every frame; only
+    // a change costs more than the comparison. Characters follow on the next tick.
+    void setStandIns(std::vector<state::editing::model::OverlayItem> const& layers);
+    // Extracts (indexes, caches) the source player's actions, animation/equipment packets and nearby block changes for
+    // recorded ticks [fromTick, toTick). False with `error` set (readable sentence) when the replay has no such player or
+    // they are absent for the whole range. Runs on the client thread; may take a moment for long replays.
+    bool prepareStandIn(std::string const& subject, int fromTick, int toTick, std::string& error);
+    // The first and last recorded tick the player (UUID, empty for the recorder) is in the world. Any thread; empty
+    // until the recording's players have been read, which the first call asks for on the next client tick.
+    [[nodiscard]] std::optional<std::pair<int, int>> standInSourceSpan(std::string const& subject) const;
     // The viewport's Flat view: Simple graphics and full brightness while editing. Exports clear it. Any thread.
     void setFlatPreview(bool flat) noexcept { mFlatPreview.store(flat, std::memory_order_release); }
     [[nodiscard]] std::shared_ptr<std::vector<state::editing::model::GlobalPack> const> installedGlobalPacks() const {

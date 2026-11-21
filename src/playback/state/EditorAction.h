@@ -98,6 +98,10 @@ enum class EditorActionType {
     SetOverlays,
     // While a layer control is dragged: shown live, not an undo step. Without overlays it ends the preview.
     PreviewOverlays,
+    // Extracts a recorded player's actions for recorded ticks [tick, kind) (id is the player's UUID, empty for the
+    // recorder), then sets the overlays to `overlays`, which holds the new Stand-in layer: one undo step, or nothing
+    // and EditorState::standInError when the player cannot be found there.
+    HireStandIn,
 };
 
 struct EditorAction {

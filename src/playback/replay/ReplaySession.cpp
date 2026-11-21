@@ -1,6 +1,7 @@
 #include "ReplaySession.h"
 
 #include "BlockStateCondition.h"
+#include "StandIns.h"
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
@@ -207,6 +208,7 @@
 #include <filesystem>
 #include <format>
 #include <limits>
+#include <map>
 #include <memory>
 #include <numbers>
 #include <optional>
@@ -215,6 +217,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -1027,6 +1030,14 @@ void ReplaySession::clearReplayData() {
     mWeatherOverride.reset();
     mRecordedWeather.reset();
     endPoseClips(true);
+    // The cached recording reads go with the replay; the characters only while the world can still take packets.
+    if (mReplayPlayer && mNetworkHandler) despawnStandIns();
+    mStandIns.reset();
+    {
+        std::lock_guard lock(mStandInSpansMutex);
+        mStandInSpans.clear();
+        mStandInSpansReady = false;
+    }
     mBlockJournal.clear();
     {
         std::lock_guard lock(mReplayItemRegistryMutex);
@@ -1513,7 +1524,9 @@ void ReplaySession::refreshReplayPlayerRoster() {
     live.reserve(actors.size());
     auto const collectPlayer = [&](Player const& player) {
         if (&player == mReplayPlayer || player.getDimensionId() != dimension) return;
-        auto const  uniqueId = player.getOrCreateUniqueID();
+        auto const uniqueId = player.getOrCreateUniqueID();
+        // Stand-ins play recorded players again; they are not players of the recording.
+        if (isStandInUniqueId(uniqueId.rawID)) return;
         std::string uuid;
         if (auto const& own = player.getUuid(); own != mce::UUID{}) {
             uuid = own.asString();
@@ -2680,6 +2693,11 @@ void ReplaySession::finishSeek() {
     mSnapMovementDuringSeek = false;
     mSeekFinishCount.fetch_add(1, std::memory_order_acq_rel);
     settleAfterSeek();
+    // Stand-ins sat out the catch-up; they are placed, dressed and snapped where it landed.
+    if (mStandIns) {
+        mStandIns->resync = true;
+        updateStandIns(false);
+    }
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();
     if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
@@ -2902,13 +2920,17 @@ void ReplaySession::beginSeek(int targetTick) {
     // The seek rebuilds every actor with what it held at the target tick.
     endPoseClips(true);
 
+    // A Stand-in whose placed blocks changed rebuilds the world from before the first of them, so none stays behind.
+    auto const standInRewind = mStandIns ? std::exchange(mStandIns->seekRewindFrom, std::nullopt) : std::nullopt;
+    int const  snapshotTick  = standInRewind ? std::clamp(*standInRewind, 0, targetTick) : targetTick;
+
     size_t selectedReader = mReaders.size() - 1;
     int    selectedStart  = 0;
     int    chunkStart     = 0;
     size_t chunkIndex     = 0;
     for (auto const& [_, chunkMeta] : mMeta.chunks) {
         int const chunkEnd = chunkStart + std::max(0, chunkMeta.duration);
-        if (targetTick < chunkEnd || chunkIndex + 1 == mReaders.size()) {
+        if (snapshotTick < chunkEnd || chunkIndex + 1 == mReaders.size()) {
             selectedReader = chunkIndex;
             selectedStart  = chunkStart;
             break;
@@ -2950,7 +2972,7 @@ void ReplaySession::beginSeek(int targetTick) {
     }
     bool const followRecordedPlayer = changesDimension || crossesForcedSnapshot;
     bool const forceExportSnapshot  = exportSeek && mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
-    if (targetTick >= mCurrentTick && !followRecordedPlayer && !forceExportSnapshot) {
+    if (targetTick >= mCurrentTick && !followRecordedPlayer && !forceExportSnapshot && !standInRewind) {
         if (exportSeek) mSnapMovementDuringSeek = mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
         getLogger().debug(
             "Fast-forwarding replay from tick {} to tick {} without reloading snapshots",
@@ -3056,6 +3078,8 @@ void ReplaySession::tick() {
         refreshReplayPlayerRoster();
         refreshReplaySubjectBinding();
         refreshReplayEntityList();
+        if (mStandInSpansWanted.exchange(false, std::memory_order_acq_rel)) (void)standInRoster();
+        if (mSeekTargetTick < 0) updateStandIns(false);
 
         if (mSeekTargetTick >= 0) {
             auto const catchUpStart     = std::chrono::steady_clock::now();
@@ -5381,6 +5405,7 @@ void ReplaySession::handleNextTick() {
     if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
     applyWeatherOverride();
     applyPoseClips();
+    updateStandIns(true);
     updateReplaySubjectPosture(false);
 }
 
@@ -7037,6 +7062,13 @@ void ReplaySession::flushDeferredControllerPackets() {
 }
 
 bool ReplaySession::clearRecordedEntities() {
+    // Stand-ins are not recorded, but leave with the recorded entities: the world they stood in is being replaced. They
+    // come back, their blocks with them, at the first update after it is in.
+    despawnStandIns();
+    if (mStandIns) {
+        mStandIns->resync        = true;
+        mStandIns->blocksPending = true;
+    }
     visuals::setReplaySubject(std::nullopt);
     mDeferredControllerPackets.clear();
     clearReplayPlayers(false);
@@ -7516,6 +7548,660 @@ void ReplaySession::onLevelChunkHandled(ChunkPos const& pos, Dimension const& di
             chunk ? static_cast<int>(loadState) : -1
         );
     }
+}
+
+// Stand-ins: recorded players' actions played again by another character. StandIns.cpp reads the recording; this
+// spawns the characters as replay-only actors (never in mRecordedEntityIds) and drives them from handleNextTick.
+
+namespace {
+
+using state::editing::model::OverlayItem;
+using state::editing::model::OverlayKind;
+using state::editing::model::StandInLook;
+using state::editing::model::StandInSettings;
+
+// Client ticks a Stand-in's block edit has to rest before the world is rebuilt for it: a dragged field changes every
+// frame, and every rebuild is a seek.
+constexpr int StandInRebuildQuietTicks = 10;
+
+double millisecondsSince(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
+// What makes a Stand-in the character it is; a change in any of these spawns it again.
+bool sameStandInLook(StandInSettings const& a, StandInSettings const& b) {
+    return a.subject == b.subject && a.look == b.look && a.skinPlayer == b.skinPlayer && a.skinFile == b.skinFile
+        && a.slim == b.slim && a.mob == b.mob && a.nameTag == b.nameTag;
+}
+
+// What decides which blocks a Stand-in places and where.
+bool sameStandInBlocks(OverlayItem const& a, OverlayItem const& b) {
+    return a.visible == b.visible && a.startTick == b.startTick && a.endTick == b.endTick && a.channels == b.channels
+        && a.standIn.blocks == b.standIn.blocks && a.standIn.subject == b.standIn.subject
+        && a.standIn.sourceTick == b.standIn.sourceTick && a.standIn.offset == b.standIn.offset
+        && a.standIn.turn == b.standIn.turn;
+}
+
+// The layer's placement as it stands at one tick (overlayAt), about `pivot`.
+StandInPlacement standInPlacement(OverlayItem const& layerAtTick, Vec3 const& pivot) {
+    auto const& settings = layerAtTick.standIn;
+    return {pivot, Vec3{settings.offset.x, settings.offset.y, settings.offset.z}, settings.turn};
+}
+
+} // namespace
+
+StandInRuntime& ReplaySession::standInRuntime() {
+    if (!mStandIns) mStandIns = std::make_unique<StandInRuntime>();
+    return *mStandIns;
+}
+
+void ReplaySession::setStandIns(std::vector<OverlayItem> const& layers) {
+    auto&  runtime = standInRuntime();
+    size_t count   = 0;
+    bool   same    = true;
+    for (auto const& layer : layers) {
+        if (layer.kind != OverlayKind::StandIn) continue;
+        same = same && count < runtime.layers.size() && runtime.layers[count] == layer;
+        ++count;
+    }
+    if (same && count == runtime.layers.size()) return;
+    runtime.layers.clear();
+    for (auto const& layer : layers) {
+        if (layer.kind == OverlayKind::StandIn) runtime.layers.push_back(layer);
+    }
+    runtime.layersChanged = true;
+}
+
+bool ReplaySession::prepareStandIn(std::string const& subject, int fromTick, int toTick, std::string& error) {
+    if (!mActive || mReaders.empty()) {
+        error = "No replay is open.";
+        return false;
+    }
+    auto const* source = standInSource(subject, &error);
+    if (!source) return false;
+    int const last = static_cast<int>(source->present.size()) - 1;
+    int const from = std::clamp(fromTick, 0, last);
+    int const to   = std::clamp(toTick, from + 1, last + 1);
+    for (int tick = from; tick < to; ++tick) {
+        if (!source->presentAt(tick)) continue;
+        error.clear();
+        return true;
+    }
+    error = std::format("{} is not in the recording between ticks {} and {}.", source->label, from, to);
+    return false;
+}
+
+std::optional<std::pair<int, int>> ReplaySession::standInSourceSpan(std::string const& subject) const {
+    std::lock_guard lock(mStandInSpansMutex);
+    if (!mStandInSpansReady) {
+        mStandInSpansWanted.store(true, std::memory_order_release);
+        return std::nullopt;
+    }
+    auto const span = mStandInSpans.find(subject);
+    if (span == mStandInSpans.end()) return std::nullopt;
+    return span->second;
+}
+
+StandInRecording ReplaySession::standInRecording() const {
+    StandInRecording recording{mReaders, {}, {}};
+    int              start = 0;
+    size_t           index = 0;
+    for (auto const& [_, chunk] : mMeta.chunks) {
+        if (index >= mReaders.size()) break;
+        recording.chunkStarts.push_back(start);
+        recording.chunkDimensions.push_back(index < mSnapshotContexts.size() ? mSnapshotContexts[index].dimensionId : 0);
+        start += std::max(0, chunk.duration);
+        ++index;
+    }
+    recording.chunkStarts.push_back(std::max(start, getTotalTicks()));
+    return recording;
+}
+
+StandInRoster const& ReplaySession::standInRoster() {
+    auto& runtime = standInRuntime();
+    if (runtime.roster) return *runtime.roster;
+    auto const started = std::chrono::steady_clock::now();
+    try {
+        runtime.roster = scanStandInRoster(standInRecording());
+    } catch (std::exception const& e) {
+        getLogger().warn("Unable to read the replay's players for Stand-ins: {}", e.what());
+        runtime.roster = StandInRoster{};
+    }
+    {
+        std::lock_guard lock(mStandInSpansMutex);
+        mStandInSpans      = runtime.roster->spans;
+        mStandInSpansReady = true;
+    }
+    getLogger().debug(
+        "Read {} replay players for Stand-ins in {:.1f} ms",
+        runtime.roster->names.size(),
+        millisecondsSince(started)
+    );
+    return *runtime.roster;
+}
+
+StandInSource const* ReplaySession::standInSource(std::string const& subject, std::string* error) {
+    auto& runtime = standInRuntime();
+    auto  found   = runtime.sources.find(subject);
+    if (found == runtime.sources.end()) {
+        auto const& roster  = standInRoster();
+        auto const  started = std::chrono::steady_clock::now();
+        std::string reason;
+        auto        source = buildStandInSource(standInRecording(), roster, subject, reason);
+        if (source) {
+            getLogger().debug(
+                "Stand-in source '{}' read: ticks {}-{}, {} packets, {} blocks in {:.1f} ms",
+                source->label,
+                source->firstTick,
+                source->lastTick,
+                source->packets.size(),
+                source->blocks.size(),
+                millisecondsSince(started)
+            );
+        } else {
+            getLogger().warn("Stand-in source '{}' is unavailable: {}", subject, reason);
+            runtime.sourceErrors.insert_or_assign(subject, std::move(reason));
+        }
+        found = runtime.sources.emplace(subject, std::move(source)).first;
+    }
+    if (!found->second && error) *error = runtime.sourceErrors[subject];
+    return found->second.get();
+}
+
+std::optional<Vec3> ReplaySession::standInPivot(OverlayItem const& layer, StandInSource const& source) const {
+    // The first tick from the layer's sourceTick on that the source is in the world.
+    int const size = static_cast<int>(source.present.size());
+    for (int tick = std::clamp(layer.standIn.sourceTick, 0, size); tick < size; ++tick) {
+        if (source.presentAt(tick)) return source.poses[static_cast<size_t>(tick)].position;
+    }
+    return std::nullopt;
+}
+
+std::unordered_set<std::string> ReplaySession::reconcileStandIns() {
+    auto& runtime         = *mStandIns;
+    runtime.layersChanged = false;
+    std::unordered_set<std::string>                     changed;
+    std::unordered_map<std::string, OverlayItem const*> byId;
+    for (auto const& layer : runtime.layers) byId.emplace(layer.id, &layer);
+    int const  tick         = mCurrentTick;
+    // Blocks go in as the playhead reaches their tick, so a layer started by now may have put some in.
+    auto const placedBlocks = [tick](OverlayItem const& layer) {
+        return layer.visible && layer.standIn.blocks && layer.startTick <= tick;
+    };
+    auto const rebuild = [&](int from) {
+        runtime.rebuildFrom       = std::min(runtime.rebuildFrom.value_or(from), from);
+        runtime.rebuildQuietTicks = 0;
+    };
+    auto const forgetActor = [&](std::string const& id) {
+        auto const actor = runtime.actors.find(id);
+        if (actor == runtime.actors.end()) return;
+        despawnStandIn(actor->second);
+        runtime.actors.erase(actor);
+    };
+
+    for (auto applied = runtime.applied.begin(); applied != runtime.applied.end();) {
+        if (byId.contains(applied->first)) {
+            ++applied;
+            continue;
+        }
+        if (placedBlocks(applied->second)) rebuild(applied->second.startTick);
+        forgetActor(applied->first);
+        applied = runtime.applied.erase(applied);
+    }
+    for (auto const& layer : runtime.layers) {
+        auto const old = runtime.applied.find(layer.id);
+        if (old != runtime.applied.end() && old->second == layer) continue;
+        changed.insert(layer.id);
+        if (old == runtime.applied.end()) {
+            if (placedBlocks(layer)) runtime.blocksPending = true;
+        } else {
+            // Blocks already in the world can only be taken out by rebuilding it; new ones just go in.
+            if (!sameStandInBlocks(old->second, layer)) {
+                if (placedBlocks(old->second)) rebuild(std::min(old->second.startTick, layer.startTick));
+                else if (placedBlocks(layer)) runtime.blocksPending = true;
+            }
+            if (!sameStandInLook(old->second.standIn, layer.standIn)) forgetActor(layer.id);
+        }
+        runtime.applied.insert_or_assign(layer.id, layer);
+    }
+    return changed;
+}
+
+void ReplaySession::updateStandIns(bool advanced) {
+    if (!mStandIns || !mReplayPlayer || !mNetworkHandler || mReaders.empty()) return;
+    auto& runtime = *mStandIns;
+    if (runtime.layers.empty() && runtime.applied.empty() && !runtime.rebuildFrom) {
+        runtime.resync        = false;
+        runtime.blocksPending = false;
+        return;
+    }
+    int const  tick    = mCurrentTick;
+    bool const loading = mPendingSnapshotApply || mPendingReplayDimension;
+    // Characters wait for a settled world: a seek places them where it lands, a snapshot once its chunks are in.
+    bool const settled = mSeekTargetTick < 0 && !loading && !mChunkInjectionPending && !mApplyingChunkSnapshot;
+
+    std::unordered_set<std::string> changed;
+    if (runtime.layersChanged && settled) changed = reconcileStandIns();
+
+    // Blocks go in on every played tick, a seek's catch-up included, the normal journaled way: a seek back takes them
+    // out again.
+    if (runtime.blocksPending && !loading) {
+        runtime.blocksPending = false;
+        // Everything up to now; a played tick puts its own in below.
+        for (auto const& layer : runtime.layers) {
+            replayStandInBlocks(layer, std::numeric_limits<int>::min(), advanced ? tick - 1 : tick);
+        }
+    }
+    if (advanced) {
+        for (auto const& layer : runtime.layers) replayStandInBlocks(layer, tick, tick);
+    }
+    if (!settled) return;
+
+    // The world is rebuilt once the edits rest, and only while paused: the seek that does it stops playback.
+    if (!advanced && runtime.rebuildFrom && ++runtime.rebuildQuietTicks >= StandInRebuildQuietTicks && mIsPaused
+        && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive && !isSeekPending()) {
+        runtime.seekRewindFrom = std::exchange(runtime.rebuildFrom, std::nullopt);
+        getLogger().debug("Rebuilding the replay world from tick {} for a Stand-in's blocks", *runtime.seekRewindFrom);
+        requestSeek(tick);
+    }
+
+    auto&     level     = mReplayPlayer->getLevel();
+    int const dimension = mReplayPlayer->getDimensionId().mValue;
+    for (auto const& layer : runtime.layers) {
+        auto&       actor      = runtime.actors[layer.id];
+        auto const* source     = layer.visible ? standInSource(layer.standIn.subject) : nullptr;
+        int const   sourceTick = layer.standIn.sourceTick + (tick - layer.startTick);
+        bool const  active     = source && layer.activeAt(tick) && source->presentAt(sourceTick)
+                         && source->dimensions[static_cast<size_t>(sourceTick)] == dimension;
+        if (!active) {
+            despawnStandIn(actor);
+            continue;
+        }
+        if (actor.failed) continue;
+        Actor* character = actor.spawned ? level.fetchEntity(ActorUniqueID{actor.uniqueId}, false) : nullptr;
+        // Between played ticks only a change, a landing or a lost character needs it placed again.
+        if (character && !advanced && !runtime.resync && !changed.contains(layer.id)) continue;
+        auto const pivot = standInPivot(layer, *source);
+        if (!pivot) continue;
+        auto const pose = placeStandInPose(
+            source->poses[static_cast<size_t>(sourceTick)],
+            standInPlacement(state::editing::model::overlayAt(layer, tick), *pivot)
+        );
+        bool const fresh = !character;
+        if (fresh) {
+            character = spawnStandIn(layer, *source, actor, pose);
+            if (!character) continue;
+        }
+        placeStandIn(*character, actor, pose, fresh || !advanced);
+        bool const showName = !layer.standIn.nameTag.empty();
+        if (fresh || runtime.resync) dressStandIn(*source, actor, sourceTick, showName);
+        if (!advanced) continue;
+        // What the source did on this tick: swings, held items, flags, events, animations.
+        auto const byTick = [](StandInPacket const& packet, int at) { return packet.tick < at; };
+        for (auto recorded = std::lower_bound(source->packets.begin(), source->packets.end(), sourceTick, byTick);
+             recorded != source->packets.end() && recorded->tick == sourceTick;
+             ++recorded) {
+            sendStandInRecorded(*recorded, *source, actor, showName);
+        }
+    }
+    runtime.resync = false;
+}
+
+void ReplaySession::replayStandInBlocks(OverlayItem const& layer, int fromTick, int toTick) {
+    if (!layer.visible || !layer.standIn.blocks || !mReplayPlayer) return;
+    fromTick = std::max(fromTick, layer.startTick);
+    toTick   = std::min(toTick, layer.endTick - 1);
+    if (fromTick > toTick) return;
+    auto const* source = standInSource(layer.standIn.subject);
+    if (!source || source->blocks.empty()) return;
+    auto const pivot = standInPivot(layer, *source);
+    if (!pivot) return;
+
+    // A layer tick plays the source tick `shift` later.
+    int const  shift     = layer.standIn.sourceTick - layer.startTick;
+    int const  dimension = mReplayPlayer->getDimensionId().mValue;
+    auto const byTick    = [](StandInBlock const& block, int at) { return block.tick < at; };
+    std::vector<StandInBlock> placed;
+    int                       placementTick = std::numeric_limits<int>::min();
+    StandInPlacement          placement;
+    for (auto block = std::lower_bound(source->blocks.begin(), source->blocks.end(), fromTick + shift, byTick);
+         block != source->blocks.end() && block->tick <= toTick + shift;
+         ++block) {
+        if (source->dimensions[static_cast<size_t>(block->tick)] != dimension) continue;
+        int const layerTick = block->tick - shift;
+        if (layerTick != placementTick) {
+            placementTick = layerTick;
+            placement     = standInPlacement(state::editing::model::overlayAt(layer, layerTick), *pivot);
+        }
+        auto moved = *block;
+        moved.pos  = placeStandInBlock(block->pos, placement);
+        placed.push_back(moved);
+    }
+    // Many ticks at once (after a snapshot) only need the last block at each place.
+    if (fromTick != toTick) {
+        std::map<std::tuple<int, int, int, uint32_t>, size_t> last;
+        for (size_t index = 0; index < placed.size(); ++index) {
+            auto const& pos = placed[index].pos;
+            last.insert_or_assign(std::tuple{pos.x, pos.y, pos.z, placed[index].layer}, index);
+        }
+        std::vector<StandInBlock> kept;
+        kept.reserve(last.size());
+        for (auto const& [_, index] : last) kept.push_back(placed[index]);
+        placed = std::move(kept);
+    }
+    for (auto const& change : placed) {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::UpdateBlock);
+        if (!packet) return;
+        auto& update        = static_cast<UpdateBlockPacket&>(*packet);
+        update.mPos         = change.pos;
+        update.mLayer       = change.layer;
+        update.mUpdateFlags = change.flags;
+        update.mRuntimeId   = change.runtimeId;
+        PlaybackBuffer payload;
+        packet->write(payload);
+        // As a recorded block update: journaled, so a seek back takes it out again.
+        if (!applyGamePacket(MinecraftPacketIds::UpdateBlock, payload.mBuffer)) {
+            getLogger().warn("Unable to place Stand-in '{}' blocks at tick {}", layer.name, mCurrentTick);
+            return;
+        }
+    }
+}
+
+Actor* ReplaySession::spawnStandIn(
+    OverlayItem const&   layer,
+    StandInSource const& source,
+    StandInActor&        actor,
+    StandInPose const&   pose
+) {
+    auto&       runtime  = *mStandIns;
+    auto&       level    = mReplayPlayer->getLevel();
+    auto const& settings = layer.standIn;
+    // Ids are the layer's for as long as it keeps its look.
+    if (actor.uniqueId == 0) {
+        uint32_t const slot = runtime.nextId++ % StandInIdCount;
+        actor.uniqueId      = StandInUniqueIdBase + static_cast<int64_t>(slot);
+        actor.runtimeId     = StandInRuntimeIdBase + slot;
+    }
+    ActorUniqueID const  uniqueId{actor.uniqueId};
+    ActorRuntimeID const runtimeId{actor.runtimeId};
+    actor.spawned = false;
+    actor.mob     = settings.look == StandInLook::Mob;
+    // One left behind (its world was replaced under it) goes first, or the client refuses the new one.
+    if (level.fetchEntity(uniqueId, false) || level.getRuntimeEntity(runtimeId, false)) {
+        if (auto remove = MinecraftPackets::createPacket(MinecraftPacketIds::RemoveActor)) {
+            static_cast<RemoveActorPacket&>(*remove).mEntityId = uniqueId;
+            sendStandInPacket(remove);
+        }
+    }
+
+    if (actor.mob) {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::AddActor);
+        if (!packet) return nullptr;
+        auto& add          = static_cast<AddActorPacket&>(*packet);
+        add.mEntityId      = uniqueId;
+        add.mRuntimeId     = runtimeId;
+        add.mActorType     = settings.mob;
+        add.mPos           = Vec3{pose.position.x, pose.position.y - kServerEyeHeight, pose.position.z};
+        add.mRot           = Vec2{pose.pitch, pose.yaw};
+        add.mYHeadRotation = pose.headYaw;
+        add.mYBodyRotation = pose.bodyYaw;
+        sendStandInPacket(packet);
+    } else {
+        auto packet = decodeStandInPacket(MinecraftPacketIds::AddPlayer, source.addPlayer);
+        if (!packet) {
+            getLogger().warn("Stand-in '{}' has no recorded player to copy", layer.name);
+            actor.failed = true;
+            return nullptr;
+        }
+        actor.uuid = mce::UUID::random();
+        // The player list first: the client takes a player's skin from it.
+        sendStandInPacket(standInPlayerList(settings, actor));
+        auto& add                         = static_cast<AddPlayerPacket&>(*packet);
+        add.mUuid                         = actor.uuid;
+        add.mRuntimeId                    = runtimeId;
+        add.mAbilitiesData->mTargetPlayer = uniqueId;
+        add.mName                         = settings.nameTag;
+        add.mPlatformOnlineId->clear();
+        add.mDeviceId->clear();
+        add.mLinks->clear();
+        add.mPassengerOfBlockData->reset();
+        add.mPos      = pose.position;
+        add.mVelocity = Vec3{};
+        add.mRot      = Vec2{pose.pitch, pose.yaw};
+        add.mYHeadRot = pose.headYaw;
+        // A recorded spectator is drawn as a floating head; a Stand-in is always a whole player.
+        add.mPlayerGameType = GameType::Survival;
+        keepStandInData(*add.mUnpack->mData, false, !settings.nameTag.empty());
+        sendStandInPacket(packet);
+    }
+
+    auto* character = level.fetchEntity(uniqueId, false);
+    if (!character) {
+        // Not tried again until the look changes: an unknown mob type would be refused every tick.
+        actor.failed = true;
+        getLogger().warn("Stand-in '{}' could not be spawned as {}", layer.name, actor.mob ? settings.mob : "a player");
+        return nullptr;
+    }
+    actor.spawned = true;
+    if (actor.mob) {
+        character->setNameTag(settings.nameTag);
+    } else if (character->isPlayer()) {
+        // As for recorded players: the actor takes its skin from its player-list entry.
+        auto const& entries = level.getPlayerList();
+        auto const  entry   = entries.find(actor.uuid);
+        if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
+            auto& player = static_cast<Player&>(*character);
+            player.updateSkin(*entry->second.mSkin, static_cast<int>(player.getClientSubId()));
+        }
+    }
+    getLogger().debug(
+        "Stand-in '{}' spawned as {} (unique={}, runtime={})",
+        layer.name,
+        actor.mob ? settings.mob : "a player",
+        actor.uniqueId,
+        actor.runtimeId
+    );
+    return character;
+}
+
+std::shared_ptr<Packet> ReplaySession::standInPlayerList(StandInSettings const& settings, StandInActor const& actor) {
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::PlayerList);
+    if (!packet || !mReplayPlayer) return nullptr;
+    auto&       runtime = *mStandIns;
+    auto const& roster  = standInRoster();
+
+    SerializedSkinRef const* fileSkin = nullptr;
+    if (settings.look == StandInLook::SkinFile) {
+        auto const key   = settings.skinFile + (settings.slim ? "|slim" : "|wide");
+        auto       found = runtime.fileSkins.find(key);
+        if (found == runtime.fileSkins.end()) {
+            std::string error;
+            auto        skin = loadStandInSkin(settings.skinFile, settings.slim, error);
+            if (!skin) getLogger().warn("Stand-in skin '{}' is unusable, its source's is worn: {}", settings.skinFile, error);
+            found = runtime.fileSkins.emplace(key, std::move(skin)).first;
+        }
+        fileSkin = found->second.get();
+    }
+    // The entry the Stand-in's is made from: the player whose skin it wears, live or as last recorded.
+    std::string wearer = settings.look == StandInLook::PlayerSkin ? settings.skinPlayer : settings.subject;
+    if (wearer.empty()) wearer = roster.recorderUuid;
+    mce::UUID const wearerUuid = wearer.empty() ? mce::UUID{} : mce::UUID::fromString(wearer);
+
+    std::optional<PlayerListPacketPayload::AddEntry> entry;
+    auto const&                                      listed = mReplayPlayer->getLevel().getPlayerList();
+    if (auto const live = listed.find(wearerUuid);
+        wearerUuid != mce::UUID{} && live != listed.end() && live->second.mSkin->mSkinImpl) {
+        entry.emplace(live->second);
+    } else if (auto const stored = roster.playerLists.find(wearer); stored != roster.playerLists.end()) {
+        if (auto const recorded = decodeStandInPacket(MinecraftPacketIds::PlayerList, stored->second)) {
+            for (auto const& candidate : *static_cast<PlayerListPacket const&>(*recorded).mEntries) {
+                auto const* added = std::get_if<PlayerListPacketPayload::AddEntry>(&candidate);
+                if (!added || *added->mUUID != wearerUuid) continue;
+                entry.emplace(*added);
+                break;
+            }
+        }
+    }
+    if (!entry) entry.emplace();
+    if (fileSkin) *entry->mSkin = *fileSkin;
+    if (!entry->mSkin->mSkinImpl) *entry->mSkin = SerializedSkinRef::createTrustedDefaultSerializedSkin();
+    entry->mUUID = actor.uuid;
+    entry->mId   = ActorUniqueID{actor.uniqueId};
+    entry->mName = settings.nameTag;
+    entry->mXUID->clear();
+    entry->mPlayFabId->clear();
+    entry->mPlatformOnlineId->clear();
+    entry->mIsHost      = false;
+    entry->mIsSubClient = false;
+    if (entry->mSkin->mSkinImpl) {
+        // As for recorded skins: never the viewer's own, and shown as it is.
+        entry->mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
+        entry->mSkin->mSkinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
+    }
+    static_cast<PlayerListPacket&>(*packet).mEntries->emplace_back(std::move(*entry));
+    return packet;
+}
+
+void ReplaySession::placeStandIn(Actor& actor, StandInActor const& standIn, StandInPose const& pose, bool snap) {
+    // A mob is placed by its feet; a player's recorded position is its eyes.
+    Vec3 const position =
+        standIn.mob ? Vec3{pose.position.x, pose.position.y - kServerEyeHeight, pose.position.z} : pose.position;
+    Vec2 const                      rotation{pose.pitch, pose.yaw};
+    auto const                      previous = replayRenderPose(actor);
+    visuals::EntityRenderPose const current{replayRenderPosition(position), pose.pitch, pose.yaw, pose.headYaw, pose.bodyYaw};
+
+    std::shared_ptr<Packet> packet;
+    if (standIn.mob) {
+        packet = MinecraftPackets::createPacket(MinecraftPacketIds::MoveAbsoluteActor);
+        if (packet) {
+            // Turned yaws can leave -180..180; the byte wraps them.
+            auto const quantize = [](float degrees) {
+                return static_cast<schar>(static_cast<int>(std::floor(degrees * 256.0f / 360.0f)) & 0xFF);
+            };
+            auto& move         = *static_cast<MoveActorAbsolutePacket&>(*packet).mMoveData;
+            move.mRuntimeId    = ActorRuntimeID{standIn.runtimeId};
+            move.mHeader->mRaw = static_cast<uchar>((pose.onGround ? 1 : 0) | 2);
+            move.mPos          = position;
+            move.mRotX         = quantize(pose.pitch);
+            move.mRotY         = quantize(pose.yaw);
+            move.mRotYHead     = quantize(pose.headYaw);
+            move.mRotYBody     = quantize(pose.bodyYaw);
+        }
+    } else {
+        packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
+        if (packet) {
+            auto& move          = static_cast<MovePlayerPacket&>(*packet);
+            move.mPlayerID      = ActorRuntimeID{standIn.runtimeId};
+            move.mPos           = position;
+            move.mRot           = rotation;
+            move.mYHeadRot      = pose.headYaw;
+            move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
+            move.mTeleportData  = MovePlayerTeleportData{0, -1};
+            move.mOnGround      = pose.onGround;
+        }
+    }
+    sendStandInPacket(packet);
+
+    ActorUniqueID const id{standIn.uniqueId};
+    if (auto const key = replayEntityRenderKey(actor.getLevel(), id)) {
+        mEntityRenderKeys.insert_or_assign(id, *key);
+        // A snap drops what was drawn so far: until the next tick commits, the actor shows where it now stands.
+        if (snap) visuals::removeReplayEntityPose(*key);
+        visuals::queueReplayEntityPose(*key, snap ? current : previous, current);
+    }
+    pinReplayEntityHeadRotation(actor, pose.headYaw, pose.bodyYaw);
+    if (snap) cancelNativeMovementInterpolation(actor, position, rotation, pose.headYaw);
+    else applyReplayEntityMovement(actor, position, previous, rotation, pose.headYaw, mCurrentTick);
+}
+
+void ReplaySession::dressStandIn(StandInSource const& source, StandInActor const& actor, int sourceTick, bool showName) {
+    // Only the source's current stay in the world counts: what it wore before it left was taken off with it.
+    int stayStart = sourceTick;
+    while (stayStart > 0 && source.presentAt(stayStart - 1)) --stayStart;
+    auto const byTick = [](StandInPacket const& packet, int at) { return packet.tick < at; };
+    auto const first  = std::lower_bound(source.packets.begin(), source.packets.end(), stayStart, byTick);
+    auto const last   = std::lower_bound(first, source.packets.end(), sourceTick + 1, byTick);
+    // The latest of each: the item held per container, the armour, each kept data item.
+    std::vector<StandInPacket const*> latest;
+    std::unordered_set<int>           containers;
+    bool                              armour = false;
+    int                               data   = 0;
+    for (auto packet = last; packet != first;) {
+        --packet;
+        switch (packet->id) {
+        case MinecraftPacketIds::PlayerEquipment:
+            if (containers.insert(packet->detail).second) latest.push_back(&*packet);
+            break;
+        case MinecraftPacketIds::MobArmorEquipment:
+            if (!std::exchange(armour, true)) latest.push_back(&*packet);
+            break;
+        case MinecraftPacketIds::SetActorData:
+            if ((packet->detail & ~data) != 0) latest.push_back(&*packet);
+            data |= packet->detail;
+            break;
+        default:
+            break;
+        }
+    }
+    // Oldest first, so where two carry the same item the later one wins.
+    for (auto packet = latest.rbegin(); packet != latest.rend(); ++packet) {
+        sendStandInRecorded(**packet, source, actor, showName);
+    }
+}
+
+void ReplaySession::sendStandInRecorded(
+    StandInPacket const& recorded,
+    StandInSource const& source,
+    StandInActor const&  actor,
+    bool                 showName
+) {
+    auto packet = retargetStandInPacket(recorded, source, actor.runtimeId, actor.mob, showName);
+    if (!packet) return;
+    if (recorded.id == MinecraftPacketIds::TriggerAnimation) {
+        // Controller transitions wait for the actor's animations, as recorded ones do.
+        PlaybackBuffer payload;
+        packet->write(payload);
+        if (!applyGamePacket(recorded.id, payload.mBuffer)) {
+            getLogger().debug("Unable to play a Stand-in animation at tick {}", mCurrentTick);
+        }
+        return;
+    }
+    sendStandInPacket(std::move(packet));
+}
+
+void ReplaySession::despawnStandIn(StandInActor& actor) {
+    if (!actor.spawned) return;
+    actor.spawned = false;
+    ActorUniqueID const id{actor.uniqueId};
+    if (auto const key = mEntityRenderKeys.find(id); key != mEntityRenderKeys.end()) {
+        visuals::removeReplayEntityPose(key->second);
+        mEntityRenderKeys.erase(key);
+    }
+    gReplayHandBobTick.erase(actor.uniqueId);
+    if (auto remove = MinecraftPackets::createPacket(MinecraftPacketIds::RemoveActor)) {
+        static_cast<RemoveActorPacket&>(*remove).mEntityId = id;
+        sendStandInPacket(remove);
+    }
+    if (actor.mob) return;
+    if (auto list = MinecraftPackets::createPacket(MinecraftPacketIds::PlayerList)) {
+        PlayerListPacketPayload::RemoveEntry entry;
+        entry.mAction = PlayerListPacketType::Remove;
+        entry.mUUID   = actor.uuid;
+        static_cast<PlayerListPacket&>(*list).mEntries->emplace_back(entry);
+        sendStandInPacket(list);
+    }
+}
+
+void ReplaySession::despawnStandIns() {
+    if (!mStandIns) return;
+    for (auto& [_, actor] : mStandIns->actors) despawnStandIn(actor);
+}
+
+void ReplaySession::sendStandInPacket(std::shared_ptr<Packet> packet) {
+    if (!packet || !packet->mHandler || !mNetworkHandler) return;
+    mInjectingPacket.store(packet.get(), std::memory_order_release);
+    InjectionReset reset{mInjectingPacket};
+    packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 }
 
 } // namespace playback::replay

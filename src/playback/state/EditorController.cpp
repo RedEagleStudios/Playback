@@ -474,6 +474,19 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::PreviewOverlays:
         mOverlayPreview = action.overlays;
         break;
+    case EditorActionType::HireStandIn: {
+        // The actions are extracted first, so a range without the player leaves the project as it was.
+        mOverlayPreview.reset();
+        std::string error;
+        if (!action.overlays) {
+            error = "No Stand-in layer was given.";
+        } else if (replay::ReplaySession::getInstance().prepareStandIn(action.id, action.tick, action.kind, error)) {
+            mCommandStack.push(CommandFactory::createSetOverlays(*action.overlays), mProject);
+        }
+        mStandInError = std::move(error);
+        ++mStandInHireSerial;
+        break;
+    }
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
@@ -595,6 +608,8 @@ void EditorController::publishState(bool hudVisible) {
         );
         session.setGraphicsOverride(world.overrideGraphics ? std::optional{world.graphics} : std::nullopt);
         session.setPoseClips(state::editing::model::poseClipsFrom(mProject.poseKeys, mProject.totalTicks));
+        // The drafted layers while a control is held, so a Stand-in follows the edit as it is made.
+        session.setStandIns(mOverlayPreview ? *mOverlayPreview : mProject.overlays);
         state.installedGlobalPacks = session.installedGlobalPacks();
     }
     state.project = std::make_shared<state::editing::model::EditorStateExt>(mProject);
@@ -625,6 +640,8 @@ void EditorController::publishState(bool hudVisible) {
         state.capabilities.videoExport
         && exporting::ExportCoordinator::isFormatAvailable(exporting::ExportFormat::Mp4Video);
     state.exportStatus      = mExportCoordinator.status();
+    state.standInHireSerial = mStandInHireSerial;
+    state.standInError      = mStandInError;
     // Blur areas are laid out in the export's frame while one runs; the plan is read once per export.
     bool const exporting = mExportDriver && mExportDriver->isActive();
     if (exporting && !mBlurExportAspectSet) {

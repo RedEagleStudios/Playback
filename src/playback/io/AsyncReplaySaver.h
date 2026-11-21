@@ -176,6 +176,10 @@ public:
 
     [[nodiscard]] std::vector<CommandCameraSample> readCommandCameraSamples();
 
+    // Every action of the chunk without applying it: the snapshot's first (tick 0, `snapshot` set), then the ones after
+    // it at the tick they land in, counted from the chunk start. The read position is left where it was.
+    void scanActions(std::function<void(Action const&, std::string_view data, int tick, bool snapshot)> const& visit);
+
     void handleSnapshot(ReplaySession& replaySession);
 
     bool handleNextAction(ReplaySession& replaySession);

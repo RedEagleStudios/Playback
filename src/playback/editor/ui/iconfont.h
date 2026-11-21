@@ -90,6 +90,10 @@ namespace Playback::ReplayEditor::Icons {
 #define ICON_LIGHT_AMBIENT "\ue299" // sun-dim
 #define ICON_VANILLA     "\ue4fa" // blocks
 #define ICON_VANILLA_ITEM "\ue5c6" // pickaxe
+#define ICON_STANDIN     "\ue1a4" // users
+#define ICON_HIRE        "\ue1a2" // user-plus
+#define ICON_MARK_IN     "\ue238" // flag-triangle-right
+#define ICON_MARK_OUT    "\ue237" // flag-triangle-left
 #define ICON_MODEL      "\ue524" // cuboid
 #define ICON_FILM       "\ue0d0" // film
 #define ICON_THIRDS     "\ue0ef" // hash

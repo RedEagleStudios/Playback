@@ -35,6 +35,8 @@ std::string defaultName(OverlayKind kind, ShapeKind shape, int points, BlurStyle
         return "playback.refactorEditor.layers.defaultBlur"_tr(blurStyleName(blur), number);
     case OverlayKind::Light:
         return "playback.refactorEditor.layers.defaultBlur"_tr(lightStyleName(light), number);
+    case OverlayKind::StandIn:
+        return "playback.refactorEditor.standIn.defaultName"_tr(number);
     case OverlayKind::Shape:
         break;
     }
@@ -235,6 +237,8 @@ char const* icon(OverlayItem const& item) {
         return blurStyleIcon(item.blur.style);
     case OverlayKind::Light:
         return lightStyleIcon(item.light.style);
+    case OverlayKind::StandIn:
+        return ICON_STANDIN;
     case OverlayKind::Shape:
         break;
     }
@@ -249,11 +253,14 @@ char const* icon(OverlayItem const& item) {
     return item.shape.points == 3 ? ICON_TRIANGLE : ICON_POLYGON;
 }
 
-std::optional<std::string> pickModelFile() {
+namespace {
+
+// An Open dialog for one kind of file: `label (*.pattern)`.
+std::optional<std::string> pickFile(std::string const& label, wchar_t const* pattern) {
     std::array<wchar_t, 32768> file{};
-    std::wstring filter = wide("playback.refactorEditor.layers.modelFiles"_tr()) + L" (*.mimodel)";
+    std::wstring filter = wide(label) + L" (" + pattern + L")";
     filter.push_back(L'\0');
-    filter += L"*.mimodel";
+    filter += pattern;
     filter.push_back(L'\0');
     filter.push_back(L'\0');
 
@@ -265,6 +272,16 @@ std::optional<std::string> pickModelFile() {
     dialog.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (!GetOpenFileNameW(&dialog)) return std::nullopt;
     return utf8(file.data());
+}
+
+} // namespace
+
+std::optional<std::string> pickModelFile() {
+    return pickFile("playback.refactorEditor.layers.modelFiles"_tr(), L"*.mimodel");
+}
+
+std::optional<std::string> pickSkinFile() {
+    return pickFile("playback.refactorEditor.standIn.skinFiles"_tr(), L"*.png");
 }
 
 std::optional<state::editing::model::Vec3> pointInFrontOfCamera(float distance) {

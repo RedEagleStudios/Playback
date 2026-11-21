@@ -224,6 +224,35 @@ std::vector<ReplayReader::CommandCameraSample> ReplayReader::readCommandCameraSa
     return samples;
 }
 
+void ReplayReader::scanActions(
+    std::function<void(Action const&, std::string_view data, int tick, bool snapshot)> const& visit
+) {
+    auto const savedReadPointer = mStream.mReadPointer;
+    mStream.mReadPointer        = mSnapshotOffset;
+    try {
+        while (mStream.mReadPointer < mActionsOffset) {
+            auto const actionId = mStream.getVarInt().value();
+            auto const actionIt = mActionMap.find(actionId);
+            if (actionIt == mActionMap.end()) {
+                throw std::runtime_error(std::format("Unknown replay snapshot action id: {}", actionId));
+            }
+            auto const dataSize = mStream.getUnsignedInt().value();
+            if (mStream.mReadPointer > mActionsOffset || dataSize > mActionsOffset - mStream.mReadPointer) {
+                throw std::runtime_error(
+                    std::format("Action {} extends beyond the replay snapshot", actionIt->second->name)
+                );
+            }
+            visit(*actionIt->second, {mStream.mView.data() + mStream.mReadPointer, dataSize}, 0, true);
+            mStream.mReadPointer += dataSize;
+        }
+        mStream.mReadPointer = savedReadPointer;
+    } catch (...) {
+        mStream.mReadPointer = savedReadPointer;
+        throw;
+    }
+    forEachAction([&](Action const& action, std::string_view data, int tick) { visit(action, data, tick, false); });
+}
+
 void ReplayReader::handleSnapshot(ReplaySession& session) {
     mStream.mReadPointer = mSnapshotOffset;
 

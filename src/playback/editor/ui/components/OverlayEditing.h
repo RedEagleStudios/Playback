@@ -52,6 +52,8 @@ void endPreview(PanelContext const& ctx);
 
 // Asks for a .mimodel file; its UTF-8 path, or none when cancelled.
 [[nodiscard]] std::optional<std::string> pickModelFile();
+// Asks for a skin image (.png); its UTF-8 path, or none when cancelled.
+[[nodiscard]] std::optional<std::string> pickSkinFile();
 
 // Where the camera looks, `distance` blocks ahead and down to about foot height, for a model placed from the view.
 [[nodiscard]] std::optional<state::editing::model::Vec3> pointInFrontOfCamera(float distance);
