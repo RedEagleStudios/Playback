@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The game's pause menu no longer opens inside a replay. Switching to another window (or a controller's menu button) opened it over the editor, paused the replay world under it and took the mouse, so clicks and drags in the editor went astray (a drag could keep stretching a layer). It is now closed the moment it shows.
 - Letting go of a World section slider could crash the game. The finished drag was committed from the draft after the draft had already been cleared, so the settings were copied from freed memory; with keyed World values (whose keys live in that memory) it crashed every time. Follow sliders had the same fault.
 - The timeline's track list controls line up: the add and snap buttons are as tall as the search field beside them, and each row's buttons sit in even, square slots with a hover highlight instead of oversized icons touching each other. Long track names stop short of the buttons.
 - A player riding when recording starts sits on its vehicle in the replay. The snapshot's spawn packet for the vehicle (a bicycle, a horse, a boat) named its rider by the recording player's live ID, which the replay does not know. Vehicles in the snapshot and vehicles spawned while recording now name the recording player as the replay knows it. Older replays are fixed by `repair_links.py` in the repair kit, which writes a `-ride` copy.
