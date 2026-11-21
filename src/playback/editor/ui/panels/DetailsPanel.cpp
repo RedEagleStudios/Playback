@@ -1230,9 +1230,10 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     };
     // A dragged slider or colour shows live and becomes one undo step once no control is active any more.
     WorldSettings world  = mWorldDraft.value_or(ctx.state.project->world);
-    auto const    commit = [&](WorldSettings const& edited) {
+    // By value: the draft is reset here, and committing the draft itself must not read it after that.
+    auto const commit = [&](WorldSettings edited) {
         mWorldDraft.reset();
-        submit(EditorActionType::SetWorldSettings, edited);
+        submit(EditorActionType::SetWorldSettings, std::move(edited));
     };
     auto const drag = [&](bool changed, WorldSettings const& edited) {
         if (!changed) return;
@@ -1695,7 +1696,7 @@ void DetailsPanel::drawFollowSection(PanelContext const& ctx, state::editing::mo
 
     bool const     draft  = mFollowDraft && mFollowDraft->first == camera.id;
     FollowSettings follow = draft ? mFollowDraft->second : camera.follow;
-    auto const     commit = [&](FollowSettings const& edited) {
+    auto const     commit = [&](FollowSettings const edited) {
         mFollowDraft.reset();
         EditorAction action{EditorActionType::SetCameraFollow};
         action.id             = camera.id;

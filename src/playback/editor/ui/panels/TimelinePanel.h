@@ -163,6 +163,8 @@ private:
     bool           mDraggingPlayhead{};
     // Rows shown with their property rows, by row id.
     std::set<std::string> mExpandedRows;
+    // Rows that had keyed properties last frame; one that newly has them is expanded.
+    std::set<std::string> mExpandableRows;
     // A property key being dragged (its row id and tick, in the channel's own ticks) and its right-click menu.
     std::string mChannelDragRow;
     int         mChannelDragKey{};

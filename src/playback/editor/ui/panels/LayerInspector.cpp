@@ -376,10 +376,9 @@ void LayerInspector::keyRow(
 }
 
 void LayerInspector::setKeyed(OverlayItem& item, char const* name, float value) {
-    if (state::editing::model::hasKeys(item.channels, name)) {
-        item.channels[name][mLocalTick].value = value;
-    } else if (float* field = state::editing::model::overlayProperty(item, name)) {
-        *field = value;
-    }
+    // As an edit in a row: a key at the playhead, and the value without keys follows it.
+    if (float* field = state::editing::model::overlayProperty(item, name)) *field = value;
+    item.channels[name][mLocalTick].value = value;
 }
+
 } // namespace playback::editor::ui

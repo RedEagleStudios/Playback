@@ -36,7 +36,7 @@ private:
         char const*                         format,
         float                               displayScale = 1.0f
     );
-    // Sets a property at the playhead: its key there when it is keyed, else its static value.
+    // Sets a property at the playhead by keying it there, as an edit in its row does.
     void setKeyed(state::editing::model::OverlayItem& item, char const* name, float value);
     // The layer while a control is held: shown live, committed as one undo step on release.
     std::optional<state::editing::model::OverlayItem> mDraft;

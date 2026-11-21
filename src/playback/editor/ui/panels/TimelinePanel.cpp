@@ -2080,6 +2080,19 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     mAnimator.beginFrame();
     mTrackTree.setSearch(mTrackSearch);
     mTrackTree.rebuild(*project, mExpandedRows);
+    // A row opens on its own when a property of it gets its first key, so the new key shows on the timeline at once;
+    // one the user collapses stays collapsed until its keys are all gone.
+    {
+        bool opened = false;
+        std::set<std::string> expandable;
+        for (auto const& row : mTrackTree.rows()) {
+            if (!row.expandable) continue;
+            expandable.insert(row.id);
+            if (!mExpandableRows.contains(row.id) && !row.expanded) opened = mExpandedRows.insert(row.id).second || opened;
+        }
+        mExpandableRows = std::move(expandable);
+        if (opened) mTrackTree.rebuild(*project, mExpandedRows);
+    }
     int displayTick = mPendingSeekTick >= 0 ? mPendingSeekTick : state.currentTick;
     if (mRulerDragTick >= 0) displayTick = mRulerDragTick;
     if (mPendingSeekTick >= 0 && state.currentTick == mPendingSeekTick) mPendingSeekTick = -1;
@@ -2642,7 +2655,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             }
             bool const  world  = row.kind == TrackRowKind::World;
             float const markY  = world ? centerY : rowBottom - keyRadius * 0.7f - 2.0f;
-            float const radius = world ? keyRadius : keyRadius * 0.6f;
+            float const radius = world ? keyRadius : keyRadius * 0.75f;
             if (channels) {
                 for (int tick : keyTicks(*channels, offset)) {
                     float const x = scale.xAt(static_cast<float>(tick));

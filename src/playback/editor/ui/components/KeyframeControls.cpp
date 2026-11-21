@@ -229,14 +229,11 @@ RowResult propertyRow(
     ImGui::PopID();
     if (edited) {
         float const value = shown / displayScale;
-        // A keyed property keys every edit at the playhead; an unkeyed one has one value for the whole timeline.
-        if (channelOf(channels, name)) {
-            auto& key  = channels[name][tick];
-            key.value  = value;
-        } else {
-            staticValue = value;
-        }
-        result.changed = true;
+        // Every edit is a key at the playhead. The value without keys follows the latest edit, so removing every key
+        // leaves the property as it was last set.
+        staticValue                = value;
+        channels[name][tick].value = value;
+        result.changed             = true;
     }
     return result;
 }
@@ -279,8 +276,8 @@ RowResult colorRow(
     ImGui::PopID();
     if (edited) {
         for (int index = 0; index < 3; ++index) {
-            if (channelOf(channels, names[index])) channels[names[index]][tick].value = current[index];
-            else staticValue[index] = current[index];
+            staticValue[index]                 = current[index];
+            channels[names[index]][tick].value = current[index];
         }
         result.changed = true;
     }

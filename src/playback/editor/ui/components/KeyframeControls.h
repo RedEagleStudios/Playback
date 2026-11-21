@@ -10,8 +10,8 @@
 #include <string>
 
 // Keyframes as in a video editor: every property keys on its own. Each row shows a diamond beside its name (hollow:
-// no key here, filled: a key at the playhead) with arrows to the property's previous and next key; once a property has
-// keys, editing it keys it at the playhead, and without keys an edit changes its one static value.
+// no key here, filled: a key at the playhead) with arrows to the property's previous and next key. Every edit keys the
+// property at the playhead; the static value is what it takes without keys.
 namespace playback::editor::ui::keyframes {
 
 struct RowResult {
