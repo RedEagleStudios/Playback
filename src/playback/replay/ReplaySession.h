@@ -709,17 +709,27 @@ private:
         StandInActor const&                           actor
     );
     void placeStandIn(Actor& actor, StandInActor const& standIn, StandInPose const& pose, bool snap);
-    // Puts on what the source wore and held, and its flags, as of `sourceTick`.
-    void dressStandIn(StandInSource const& source, StandInActor const& actor, int sourceTick, bool showName);
+    // Dresses it as of `sourceTick`: what the source wore and held where the layer plays those as recorded (the
+    // layer's own choice elsewhere), and the source's flags. `fresh` (just spawned) keeps what it was spawned with
+    // where nothing was recorded.
+    void dressStandIn(
+        Actor&                                        character,
+        StandInSource const&                          source,
+        StandInActor const&                           actor,
+        state::editing::model::StandInSettings const& settings,
+        int                                           sourceTick,
+        bool                                          fresh
+    );
     void despawnStandIn(StandInActor& actor);
     void despawnStandIns();
     void sendStandInPacket(std::shared_ptr<Packet> packet);
-    // A recorded packet of the source, pointed at the Stand-in.
+    // A recorded packet of the source, pointed at the Stand-in; armour and hand packets only where the layer plays
+    // those as recorded.
     void sendStandInRecorded(
-        StandInPacket const& recorded,
-        StandInSource const& source,
-        StandInActor const&  actor,
-        bool                 showName
+        StandInPacket const&                          recorded,
+        StandInSource const&                          source,
+        StandInActor const&                           actor,
+        state::editing::model::StandInSettings const& settings
     );
 
 public:

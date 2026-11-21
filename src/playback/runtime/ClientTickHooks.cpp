@@ -13,6 +13,7 @@
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/GameAddress.h"
+#include "playback/screen/RecordControlsHooks.h"
 #include "playback/screen/RecordDialogs.h"
 
 #include "ll/api/memory/Hook.h"
@@ -195,6 +196,7 @@ LL_TYPE_INSTANCE_HOOK(
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
     replay.updateFrame();
+    if (replay.isActive()) screen::dismissReplayPauseScreen(*this);
     editor::input::tickFlySpeed(getLocalPlayer(), replay.isActive() && replay.hasJoinedReplayWorld());
     audio::preview::update(
         replay.isActive(),

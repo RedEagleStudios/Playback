@@ -57,6 +57,8 @@ private:
     VanillaPicker          mVanillaPicker;
     std::array<char, 64>   mNameTagBuffer{};
     std::array<char, 96>   mMobBuffer{};
+    // The item id typed into an open slot list.
+    std::array<char, 96>   mGearBuffer{};
 };
 
 } // namespace playback::editor::ui

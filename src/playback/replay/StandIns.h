@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -181,6 +182,8 @@ struct StandInRuntime {
     std::optional<StandInRoster>                                    roster;
     // Skin files by path and model; null when the file could not be used.
     std::unordered_map<std::string, std::unique_ptr<SerializedSkinRef>> fileSkins;
+    // Item ids a layer chose that this game does not know, each logged once.
+    std::unordered_set<std::string> unknownItems;
     uint32_t                                                            nextId{};
     bool                                                                layersChanged{};
     // Every Stand-in is placed and dressed again at the next update (after a seek or a snapshot).

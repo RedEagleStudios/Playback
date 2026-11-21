@@ -139,6 +139,9 @@ struct LightSettings {
 // PNG), or a mob of any entity type.
 enum class StandInLook : uint8_t { SameSkin, PlayerSkin, SkinFile, Mob };
 
+// What a Stand-in wears or holds: what the source had at that moment, nothing, or the items chosen for it.
+enum class StandInGear : uint8_t { AsRecorded, None, Custom };
+
 // A Stand-in plays a recorded player's actions (movement, turning, swings, what they hold and wear, and optionally the
 // blocks they changed) again as another character, so one player can fill a scene with many. The layer's start plays
 // the recording at `sourceTick`; each tick after it plays the next recorded tick.
@@ -163,6 +166,14 @@ struct StandInSettings {
     float turn{};
     // Also places and breaks the blocks the source changed within reach, at the Stand-in's time and place.
     bool blocks{};
+    // Armour: as recorded, none (shows the skin), or these items by slot: head, chest, legs, feet ("minecraft:..."; an
+    // empty slot wears nothing there).
+    StandInGear                armor{StandInGear::AsRecorded};
+    std::array<std::string, 4> armorItems;
+    // Hands: as recorded, empty, or these items ("minecraft:diamond_sword"; empty holds nothing).
+    StandInGear hands{StandInGear::AsRecorded};
+    std::string mainHand;
+    std::string offHand;
 
     bool operator==(StandInSettings const&) const = default;
 };

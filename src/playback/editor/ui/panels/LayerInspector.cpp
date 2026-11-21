@@ -522,6 +522,70 @@ void LayerInspector::drawStandInSection(PanelContext const& ctx, OverlayItem& it
     }
     }
 
+    // What it wears and holds: as recorded, nothing (armour off shows the skin), or chosen items.
+    using state::editing::model::StandInGear;
+    std::string const gears[] = {
+        "playback.refactorEditor.standIn.gearRecorded"_tr(),
+        "playback.refactorEditor.standIn.gearNone"_tr(),
+        "playback.refactorEditor.standIn.gearCustom"_tr(),
+    };
+    auto const gearCombo = [&](char const* id, std::string const& text, StandInGear& gear) {
+        label(text);
+        int current = static_cast<int>(gear);
+        if (widgets::beginCombo(id, gears[std::clamp(current, 0, 2)].c_str())) {
+            for (int index = 0; index < 3; ++index) {
+                if (ImGui::Selectable(gears[index].c_str(), index == current)) gear = static_cast<StandInGear>(index);
+            }
+            widgets::endCombo();
+        }
+    };
+    // A slot's item: common ones to pick, or any item id typed in; "-" is an empty slot.
+    auto const itemField = [&](char const* id, std::string const& text, std::string& value,
+                               std::initializer_list<char const*> suggestions) {
+        ImGui::TextDisabled("%s", text.c_str());
+        ImGui::SetNextItemWidth(-1.0f);
+        if (!widgets::beginCombo(id, value.empty() ? "-" : value.c_str())) return;
+        if (ImGui::IsWindowAppearing()) copyInto(mGearBuffer, value);
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputTextWithHint("##item-id", "minecraft:...", mGearBuffer.data(), mGearBuffer.size(),
+                                     ImGuiInputTextFlags_EnterReturnsTrue)) {
+            value = mGearBuffer.data();
+            ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::Selectable("-", value.empty())) value.clear();
+        for (char const* suggestion : suggestions) {
+            if (ImGui::Selectable(suggestion, value == suggestion)) value = suggestion;
+        }
+        widgets::endCombo();
+    };
+    gearCombo("##standin-armor", "playback.refactorEditor.standIn.armor"_tr(), standIn.armor);
+    if (standIn.armor == StandInGear::Custom) {
+        itemField("##standin-head", "playback.refactorEditor.standIn.head"_tr(), standIn.armorItems[0],
+                  {"minecraft:leather_helmet", "minecraft:chainmail_helmet", "minecraft:iron_helmet",
+                   "minecraft:golden_helmet", "minecraft:diamond_helmet", "minecraft:netherite_helmet",
+                   "minecraft:turtle_helmet", "minecraft:carved_pumpkin"});
+        itemField("##standin-chest", "playback.refactorEditor.standIn.chest"_tr(), standIn.armorItems[1],
+                  {"minecraft:leather_chestplate", "minecraft:chainmail_chestplate", "minecraft:iron_chestplate",
+                   "minecraft:golden_chestplate", "minecraft:diamond_chestplate", "minecraft:netherite_chestplate",
+                   "minecraft:elytra"});
+        itemField("##standin-legs", "playback.refactorEditor.standIn.legs"_tr(), standIn.armorItems[2],
+                  {"minecraft:leather_leggings", "minecraft:chainmail_leggings", "minecraft:iron_leggings",
+                   "minecraft:golden_leggings", "minecraft:diamond_leggings", "minecraft:netherite_leggings"});
+        itemField("##standin-feet", "playback.refactorEditor.standIn.feet"_tr(), standIn.armorItems[3],
+                  {"minecraft:leather_boots", "minecraft:chainmail_boots", "minecraft:iron_boots",
+                   "minecraft:golden_boots", "minecraft:diamond_boots", "minecraft:netherite_boots"});
+    }
+    gearCombo("##standin-hands", "playback.refactorEditor.standIn.hands"_tr(), standIn.hands);
+    if (standIn.hands == StandInGear::Custom) {
+        itemField("##standin-main-hand", "playback.refactorEditor.standIn.mainHand"_tr(), standIn.mainHand,
+                  {"minecraft:diamond_sword", "minecraft:netherite_sword", "minecraft:iron_sword", "minecraft:bow",
+                   "minecraft:crossbow", "minecraft:trident", "minecraft:mace", "minecraft:diamond_pickaxe",
+                   "minecraft:diamond_axe", "minecraft:torch", "minecraft:fishing_rod", "minecraft:totem_of_undying"});
+        itemField("##standin-off-hand", "playback.refactorEditor.standIn.offHand"_tr(), standIn.offHand,
+                  {"minecraft:shield", "minecraft:totem_of_undying", "minecraft:torch", "minecraft:arrow",
+                   "minecraft:map"});
+    }
+
     label("playback.refactorEditor.standIn.nameTag"_tr());
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::InputTextWithHint(

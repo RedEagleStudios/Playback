@@ -546,6 +546,11 @@ json toJson(OverlayItem const& item) {
              {"offset", toJson(item.standIn.offset)},
              {"turn", item.standIn.turn},
              {"blocks", item.standIn.blocks},
+             {"armor", static_cast<int>(item.standIn.armor)},
+             {"armorItems", item.standIn.armorItems},
+             {"hands", static_cast<int>(item.standIn.hands)},
+             {"mainHand", item.standIn.mainHand},
+             {"offHand", item.standIn.offHand},
          }                                             },
         {"channels",     toJson(item.channels)         },
     };
@@ -650,6 +655,15 @@ OverlayItem overlayFrom(json const& node) {
         out.offset  = vec3From(*standIn, "offset", out.offset);
         out.turn    = finiteOr(*standIn, "turn", out.turn);
         out.blocks  = boolOr(*standIn, "blocks", false);
+        out.armor   = enumOr(*standIn, "armor", out.armor, static_cast<int>(StandInGear::Custom));
+        out.hands   = enumOr(*standIn, "hands", out.hands, static_cast<int>(StandInGear::Custom));
+        if (auto const items = standIn->find("armorItems"); items != standIn->end() && items->is_array()) {
+            for (size_t slot = 0; slot < out.armorItems.size() && slot < items->size(); ++slot) {
+                if ((*items)[slot].is_string()) out.armorItems[slot] = (*items)[slot].get<std::string>();
+            }
+        }
+        out.mainHand = stringOr(*standIn, "mainHand");
+        out.offHand  = stringOr(*standIn, "offHand");
     }
     item.channels = channelsFrom(node, "channels");
     return item;

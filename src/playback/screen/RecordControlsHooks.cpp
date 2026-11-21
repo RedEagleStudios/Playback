@@ -11,6 +11,7 @@
 #include "ll/api/i18n/I18n.h"
 #include "ll/api/memory/Hook.h"
 
+#include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/DirtyFlag.h"
 #include "mc/client/gui/ViewRequest.h"
 #include "mc/client/gui/controls/UIPropertyBag.h"
@@ -38,6 +39,8 @@ constexpr std::string_view kButtonCancel = "button.playback_record_cancel";
 
 std::atomic_bool gIndicatorEnabled{true};
 int64_t          gLastHudSignature = -1;
+// The model of a pause screen that opened inside a replay; it is closed again as soon as it shows.
+std::weak_ptr<MinecraftScreenModel> gReplayPauseModel;
 
 enum class RecordUiState : int { Hidden, Idle, Recording, Paused };
 
@@ -194,6 +197,12 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto* result = origin(std::move(model), overlaySocialDrawerOnce);
     registerPauseControls(*this);
+    // A replay never shows the game's pause menu: focus loss or a pad's menu button would open it over the editor and
+    // pause the replay world under it.
+    auto const& session = replay::ReplaySession::getInstance();
+    if (session.isActive() && session.hasJoinedReplayWorld()) {
+        gReplayPauseModel = std::shared_ptr<MinecraftScreenModel>(mMinecraftScreenModel);
+    }
     return result;
 }
 
@@ -246,6 +255,13 @@ void hookRecordControls(bool enable) {
     if (hudHooked) hudHooked = !HudRecordIndicatorBindHook::unhook();
     if (pauseHooked) pauseHooked = !PauseRecordControlsHook::unhook();
     gLastHudSignature = -1;
+}
+
+void dismissReplayPauseScreen(ClientInstance& client) {
+    if (gReplayPauseModel.expired() || !client.isShowingPauseScreen()) return;
+    auto const model = gReplayPauseModel.lock();
+    gReplayPauseModel.reset();
+    if (model) model->leaveScreen(std::string{}, false);
 }
 
 void setRecordingIndicatorEnabled(bool enabled) { gIndicatorEnabled.store(enabled, std::memory_order_relaxed); }

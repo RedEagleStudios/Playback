@@ -202,6 +202,17 @@
                 "turn": "转向",
                 "blocks": "重复他改变过的方块",
                 "blocksHint": "在替身的时间和位置放置、破坏该玩家在可触及范围内改变过的方块。往回跳转会把世界恢复原样。",
+                "armor": "盔甲",
+                "hands": "手持",
+                "gearRecorded": "与录制相同",
+                "gearNone": "无",
+                "gearCustom": "自选...",
+                "head": "头部",
+                "chest": "胸部",
+                "legs": "腿部",
+                "feet": "脚部",
+                "mainHand": "主手",
+                "offHand": "副手",
                 "layerHint": "在时间轴上移动图层会改变它播放的时间；裁剪图层会改变播放录制中的哪一段。"
             },
             "keyframes": {

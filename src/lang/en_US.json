@@ -202,6 +202,17 @@
                 "turn": "Turn",
                 "blocks": "Repeat the blocks they changed",
                 "blocksHint": "Places and breaks the blocks the player changed within reach, at the Stand-in's time and place. Seeking back puts the world back.",
+                "armor": "Armour",
+                "hands": "In hand",
+                "gearRecorded": "As recorded",
+                "gearNone": "Nothing",
+                "gearCustom": "Choose...",
+                "head": "Head",
+                "chest": "Chest",
+                "legs": "Legs",
+                "feet": "Feet",
+                "mainHand": "Main hand",
+                "offHand": "Off hand",
                 "layerHint": "Moving the layer on the timeline changes when it plays; trimming it changes which part of the recording plays."
             },
             "keyframes": {

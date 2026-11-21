@@ -7557,6 +7557,7 @@ namespace {
 
 using state::editing::model::OverlayItem;
 using state::editing::model::OverlayKind;
+using state::editing::model::StandInGear;
 using state::editing::model::StandInLook;
 using state::editing::model::StandInSettings;
 
@@ -7586,6 +7587,18 @@ bool sameStandInBlocks(OverlayItem const& a, OverlayItem const& b) {
 StandInPlacement standInPlacement(OverlayItem const& layerAtTick, Vec3 const& pivot) {
     auto const& settings = layerAtTick.standIn;
     return {pivot, Vec3{settings.offset.x, settings.offset.y, settings.offset.z}, settings.turn};
+}
+
+// An item a layer chose, by id ("minecraft:diamond_sword"), resolved against the replay's item registry; empty for
+// none and for an id this game does not know (logged once).
+ItemStack standInItem(std::string const& id, std::unordered_set<std::string>& unknown) {
+    ItemStack item;
+    if (id.empty()) return item;
+    item.reinit(id, 1, 0);
+    if (item.isNull() && unknown.insert(id).second) {
+        getLogger().warn("Stand-in item '{}' is not an item of this game; that slot stays empty", id);
+    }
+    return item;
 }
 
 } // namespace
@@ -7833,15 +7846,17 @@ void ReplaySession::updateStandIns(bool advanced) {
             if (!character) continue;
         }
         placeStandIn(*character, actor, pose, fresh || !advanced);
-        bool const showName = !layer.standIn.nameTag.empty();
-        if (fresh || runtime.resync) dressStandIn(*source, actor, sourceTick, showName);
+        // A changed layer may have changed what it wears; that needs no new character, only dressing again.
+        if (fresh || runtime.resync || changed.contains(layer.id)) {
+            dressStandIn(*character, *source, actor, layer.standIn, sourceTick, fresh);
+        }
         if (!advanced) continue;
         // What the source did on this tick: swings, held items, flags, events, animations.
         auto const byTick = [](StandInPacket const& packet, int at) { return packet.tick < at; };
         for (auto recorded = std::lower_bound(source->packets.begin(), source->packets.end(), sourceTick, byTick);
              recorded != source->packets.end() && recorded->tick == sourceTick;
              ++recorded) {
-            sendStandInRecorded(*recorded, *source, actor, showName);
+            sendStandInRecorded(*recorded, *source, actor, layer.standIn);
         }
     }
     runtime.resync = false;
@@ -7983,9 +7998,9 @@ Actor* ReplaySession::spawnStandIn(
         return nullptr;
     }
     actor.spawned = true;
-    if (actor.mob) {
-        character->setNameTag(settings.nameTag);
-    } else if (character->isPlayer()) {
+    // The name tag is set on the actor itself: the recorded data it was spawned with names the source.
+    character->setNameTag(settings.nameTag);
+    if (!actor.mob && character->isPlayer()) {
         // As for recorded players: the actor takes its skin from its player-list entry.
         auto const& entries = level.getPlayerList();
         auto const  entry   = entries.find(actor.uuid);
@@ -8114,7 +8129,14 @@ void ReplaySession::placeStandIn(Actor& actor, StandInActor const& standIn, Stan
     else applyReplayEntityMovement(actor, position, previous, rotation, pose.headYaw, mCurrentTick);
 }
 
-void ReplaySession::dressStandIn(StandInSource const& source, StandInActor const& actor, int sourceTick, bool showName) {
+void ReplaySession::dressStandIn(
+    Actor&                 character,
+    StandInSource const&   source,
+    StandInActor const&    actor,
+    StandInSettings const& settings,
+    int                    sourceTick,
+    bool                   fresh
+) {
     // Only the source's current stay in the world counts: what it wore before it left was taken off with it.
     int stayStart = sourceTick;
     while (stayStart > 0 && source.presentAt(stayStart - 1)) --stayStart;
@@ -8130,10 +8152,12 @@ void ReplaySession::dressStandIn(StandInSource const& source, StandInActor const
         --packet;
         switch (packet->id) {
         case MinecraftPacketIds::PlayerEquipment:
-            if (containers.insert(packet->detail).second) latest.push_back(&*packet);
+            if (settings.hands == StandInGear::AsRecorded && containers.insert(packet->detail).second) {
+                latest.push_back(&*packet);
+            }
             break;
         case MinecraftPacketIds::MobArmorEquipment:
-            if (!std::exchange(armour, true)) latest.push_back(&*packet);
+            if (settings.armor == StandInGear::AsRecorded && !std::exchange(armour, true)) latest.push_back(&*packet);
             break;
         case MinecraftPacketIds::SetActorData:
             if ((packet->detail & ~data) != 0) latest.push_back(&*packet);
@@ -8145,17 +8169,42 @@ void ReplaySession::dressStandIn(StandInSource const& source, StandInActor const
     }
     // Oldest first, so where two carry the same item the later one wins.
     for (auto packet = latest.rbegin(); packet != latest.rend(); ++packet) {
-        sendStandInRecorded(**packet, source, actor, showName);
+        sendStandInRecorded(**packet, source, actor, settings);
+    }
+
+    // The layer's own choice; and where it plays them as recorded but nothing was recorded since the source came in,
+    // nothing, so a Stand-in dressed otherwise before is not left in it. A fresh one keeps what it was spawned with.
+    auto& unknown = mStandIns->unknownItems;
+    if (settings.armor != StandInGear::AsRecorded || (!armour && !fresh)) {
+        bool const custom = settings.armor == StandInGear::Custom;
+        for (size_t slot = 0; slot < settings.armorItems.size(); ++slot) {
+            character.setArmor(
+                static_cast<SharedTypes::Legacy::ArmorSlot>(slot),
+                custom ? standInItem(settings.armorItems[slot], unknown) : ItemStack{}
+            );
+        }
+    }
+    bool const customHands = settings.hands == StandInGear::Custom;
+    if (settings.hands != StandInGear::AsRecorded
+        || (!fresh && !containers.contains(static_cast<int>(ContainerID::Inventory)))) {
+        character.setCarriedItem(customHands ? standInItem(settings.mainHand, unknown) : ItemStack{});
+    }
+    if (settings.hands != StandInGear::AsRecorded
+        || (!fresh && !containers.contains(static_cast<int>(ContainerID::Offhand)))) {
+        character.setOffhandSlot(customHands ? standInItem(settings.offHand, unknown) : ItemStack{});
     }
 }
 
 void ReplaySession::sendStandInRecorded(
-    StandInPacket const& recorded,
-    StandInSource const& source,
-    StandInActor const&  actor,
-    bool                 showName
+    StandInPacket const&   recorded,
+    StandInSource const&   source,
+    StandInActor const&    actor,
+    StandInSettings const& settings
 ) {
-    auto packet = retargetStandInPacket(recorded, source, actor.runtimeId, actor.mob, showName);
+    // Armour and held items the layer chose itself are not the recording's to change.
+    if (recorded.id == MinecraftPacketIds::MobArmorEquipment && settings.armor != StandInGear::AsRecorded) return;
+    if (recorded.id == MinecraftPacketIds::PlayerEquipment && settings.hands != StandInGear::AsRecorded) return;
+    auto packet = retargetStandInPacket(recorded, source, actor.runtimeId, actor.mob, !settings.nameTag.empty());
     if (!packet) return;
     if (recorded.id == MinecraftPacketIds::TriggerAnimation) {
         // Controller transitions wait for the actor's animations, as recorded ones do.
