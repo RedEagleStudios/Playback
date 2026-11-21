@@ -1,5 +1,6 @@
 ﻿#include "ViewportPanel.h"
 
+#include "playback/editor/graphics/BlurEffects.h"
 #include "playback/editor/input/FlySpeed.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/Widgets.h"
@@ -578,6 +579,10 @@ void ViewportPanel::drawFloatingTransport(PanelContext const& ctx, ImVec2 const&
 
 void ViewportPanel::setGameTexture(ImTextureID texture) { mGameTexture = texture; }
 
-void ViewportPanel::setVideoAspectRatio(float aspectRatio) { mVideoAspectRatio = std::max(0.1f, aspectRatio); }
+void ViewportPanel::setVideoAspectRatio(float aspectRatio) {
+    mVideoAspectRatio = std::max(0.1f, aspectRatio);
+    // Blur areas are placed in the frame the viewport shows.
+    graphics::setBlurPreviewAspect(mVideoAspectRatio);
+}
 
 } // namespace playback::editor::ui

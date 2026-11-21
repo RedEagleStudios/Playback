@@ -100,7 +100,8 @@ private:
         PanelContext const&                ctx,
         state::editing::model::OverlayKind kind,
         state::editing::model::ShapeKind   shape  = state::editing::model::ShapeKind::Rectangle,
-        int                                points = 3
+        int                                points = 3,
+        state::editing::model::BlurStyle   blur   = state::editing::model::BlurStyle::Gaussian
     );
     void applyPendingSelection(PanelContext const& ctx);
     [[nodiscard]] std::string markerAt(

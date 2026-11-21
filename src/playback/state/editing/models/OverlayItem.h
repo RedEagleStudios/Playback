@@ -10,9 +10,10 @@
 
 namespace playback::state::editing::model {
 
-// A layer drawn over the replay picture, in the preview and in every export: a title, a shape, or a Mine-imator model
-// placed in the world. Items later in EditorStateExt::overlays draw on top of earlier ones.
-enum class OverlayKind : uint8_t { Title, Shape, Model };
+// A layer over the replay picture, in the preview and in every export: a title, a shape, a Mine-imator model placed in
+// the world, or a blur of the picture itself. Items later in EditorStateExt::overlays draw on top of earlier ones;
+// blurs act on the replay picture, under every title, shape and model.
+enum class OverlayKind : uint8_t { Title, Shape, Model, Blur };
 
 // Polygon: a regular polygon of `points` corners (3 is a triangle; many approach a circle).
 enum class ShapeKind : uint8_t { Rectangle, Ellipse, Polygon };
@@ -86,6 +87,30 @@ struct ModelPlacement {
     bool operator==(ModelPlacement const&) const = default;
 };
 
+// Gaussian: a soft even blur. Mosaic: square blocks of one colour (pixelate). Motion: streaks along one direction.
+// Radial: a zoom blur towards the area's centre.
+enum class BlurStyle : uint8_t { Gaussian, Mosaic, Motion, Radial };
+
+// Where a blur acts: the whole frame, or a rectangle or ellipse placed by the layer's transform (x, y, width, height,
+// rotation).
+enum class BlurArea : uint8_t { Frame, Rectangle, Ellipse };
+
+struct BlurSettings {
+    BlurStyle style{BlurStyle::Gaussian};
+    // Gaussian radius, mosaic block size or motion streak length as a fraction of the frame's height; Radial: how far
+    // each pixel smears towards the centre, as a fraction of its distance to it.
+    float amount{0.02f};
+    // Motion: degrees, 0 horizontal, clockwise.
+    float    angle{};
+    BlurArea area{BlurArea::Frame};
+    // Soft edge of the area, a fraction of the frame's height.
+    float feather{0.02f};
+    // Blurs everything outside the area instead.
+    bool invert{};
+
+    bool operator==(BlurSettings const&) const = default;
+};
+
 struct OverlayItem {
     std::string id;
     std::string name;
@@ -102,6 +127,7 @@ struct OverlayItem {
     TitleStyle       title;
     ShapeStyle       shape;
     ModelPlacement   model;
+    BlurSettings     blur;
     // Keyed numeric properties (overlayProperty names), each on its own. Key ticks count from startTick, so moving
     // the layer moves its keys with it.
     ValueChannels channels;
@@ -146,6 +172,9 @@ struct OverlayItem {
     if (name == "pitch") return &item.model.pitch;
     if (name == "roll") return &item.model.roll;
     if (name == "scale") return &item.model.scale;
+    if (name == "blurAmount") return &item.blur.amount;
+    if (name == "blurAngle") return &item.blur.angle;
+    if (name == "blurFeather") return &item.blur.feather;
     return nullptr;
 }
 

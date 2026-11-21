@@ -514,6 +514,15 @@ json toJson(OverlayItem const& item) {
              {"roll", model.roll},
              {"scale", model.scale},
          }                                             },
+        {"blur",
+         json{
+             {"style", static_cast<int>(item.blur.style)},
+             {"amount", item.blur.amount},
+             {"angle", item.blur.angle},
+             {"area", static_cast<int>(item.blur.area)},
+             {"feather", item.blur.feather},
+             {"invert", item.blur.invert},
+         }                                             },
         {"channels",     toJson(item.channels)         },
     };
 }
@@ -522,7 +531,7 @@ OverlayItem overlayFrom(json const& node) {
     OverlayItem item;
     item.id           = stringOr(node, "id");
     item.name         = stringOr(node, "name");
-    item.kind         = enumOr(node, "kind", item.kind, static_cast<int>(OverlayKind::Model));
+    item.kind         = enumOr(node, "kind", item.kind, static_cast<int>(OverlayKind::Blur));
     item.startTick    = std::max(0, intOr(node, "startTick", item.startTick));
     item.endTick      = std::max(item.startTick + 1, intOr(node, "endTick", item.endTick));
     item.fadeInTicks  = std::max(0, intOr(node, "fadeInTicks", 0));
@@ -578,6 +587,15 @@ OverlayItem overlayFrom(json const& node) {
         out.pitch = finiteOr(*model, "pitch", out.pitch);
         out.roll  = finiteOr(*model, "roll", out.roll);
         out.scale = std::max(0.001f, finiteOr(*model, "scale", out.scale));
+    }
+    if (auto const* blur = objectAt(node, "blur")) {
+        auto& out   = item.blur;
+        out.style   = enumOr(*blur, "style", out.style, static_cast<int>(BlurStyle::Radial));
+        out.amount  = std::max(0.0f, finiteOr(*blur, "amount", out.amount));
+        out.angle   = finiteOr(*blur, "angle", out.angle);
+        out.area    = enumOr(*blur, "area", out.area, static_cast<int>(BlurArea::Ellipse));
+        out.feather = std::max(0.0f, finiteOr(*blur, "feather", out.feather));
+        out.invert  = boolOr(*blur, "invert", out.invert);
     }
     item.channels = channelsFrom(node, "channels");
     return item;

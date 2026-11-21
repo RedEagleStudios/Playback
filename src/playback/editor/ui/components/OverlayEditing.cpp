@@ -24,12 +24,14 @@ namespace {
 
 constexpr int kDefaultLayerTicks = 100;
 
-std::string defaultName(OverlayKind kind, ShapeKind shape, int points, int number) {
+std::string defaultName(OverlayKind kind, ShapeKind shape, int points, BlurStyle blur, int number) {
     switch (kind) {
     case OverlayKind::Title:
         return "playback.refactorEditor.layers.defaultTitle"_tr(number);
     case OverlayKind::Model:
         return "playback.refactorEditor.layers.defaultModel"_tr(number);
+    case OverlayKind::Blur:
+        return "playback.refactorEditor.layers.defaultBlur"_tr(blurStyleName(blur), number);
     case OverlayKind::Shape:
         break;
     }
@@ -81,7 +83,8 @@ std::vector<OverlayItem> withItem(EditorStateExt const& project, OverlayItem con
 
 } // namespace
 
-OverlayItem makeLayer(EditorStateExt const& project, OverlayKind kind, int tick, ShapeKind shape, int points) {
+OverlayItem
+makeLayer(EditorStateExt const& project, OverlayKind kind, int tick, ShapeKind shape, int points, BlurStyle blur) {
     OverlayItem item;
     item.id          = nextId(project);
     item.kind        = kind;
@@ -97,12 +100,22 @@ OverlayItem makeLayer(EditorStateExt const& project, OverlayKind kind, int tick,
     if (kind == OverlayKind::Model) {
         if (auto const point = pointInFrontOfCamera(4.0f)) item.model.position = *point;
     }
+    if (kind == OverlayKind::Blur) {
+        // Strengths that read clearly at once; the area defaults to a box in the middle once it is not the frame.
+        item.blur.style       = blur;
+        item.blur.amount      = blur == BlurStyle::Mosaic   ? 0.03f
+                              : blur == BlurStyle::Motion   ? 0.06f
+                              : blur == BlurStyle::Radial   ? 0.3f
+                                                            : 0.02f;
+        item.transform.width  = 0.4f;
+        item.transform.height = 0.3f;
+    }
 
     int const sameKind = static_cast<int>(std::ranges::count_if(project.overlays, [&](OverlayItem const& other) {
         return other.kind == kind;
     }));
     for (int number = sameKind + 1;; ++number) {
-        item.name = defaultName(kind, shape, item.shape.points, number);
+        item.name = defaultName(kind, shape, item.shape.points, blur, number);
         if (std::ranges::none_of(project.overlays, [&](OverlayItem const& other) { return other.name == item.name; }))
             break;
     }
@@ -134,12 +147,42 @@ void previewItem(PanelContext const& ctx, OverlayItem const& item) {
 
 void endPreview(PanelContext const& ctx) { ctx.submitAction(EditorAction{EditorActionType::PreviewOverlays}); }
 
+std::string blurStyleName(BlurStyle style) {
+    switch (style) {
+    case BlurStyle::Gaussian:
+        return "playback.refactorEditor.layers.blurGaussian"_tr();
+    case BlurStyle::Mosaic:
+        return "playback.refactorEditor.layers.blurMosaic"_tr();
+    case BlurStyle::Motion:
+        return "playback.refactorEditor.layers.blurMotion"_tr();
+    case BlurStyle::Radial:
+        return "playback.refactorEditor.layers.blurRadial"_tr();
+    }
+    return {};
+}
+
+char const* blurStyleIcon(BlurStyle style) {
+    switch (style) {
+    case BlurStyle::Gaussian:
+        return ICON_BLUR;
+    case BlurStyle::Mosaic:
+        return ICON_MOSAIC;
+    case BlurStyle::Motion:
+        return ICON_MOTION;
+    case BlurStyle::Radial:
+        return ICON_RADIAL;
+    }
+    return ICON_BLUR;
+}
+
 char const* icon(OverlayItem const& item) {
     switch (item.kind) {
     case OverlayKind::Title:
         return ICON_TITLE;
     case OverlayKind::Model:
         return ICON_MODEL;
+    case OverlayKind::Blur:
+        return blurStyleIcon(item.blur.style);
     case OverlayKind::Shape:
         break;
     }

@@ -128,6 +128,9 @@ bool LayerInspector::draw(PanelContext const& ctx) {
     case OverlayKind::Model:
         drawModelSection(item);
         break;
+    case OverlayKind::Blur:
+        drawBlurSection(item);
+        break;
     }
     ImGui::EndDisabled();
 
@@ -356,6 +359,70 @@ void LayerInspector::drawModelSection(OverlayItem& item) {
     property::endSection();
 }
 
+void LayerInspector::drawBlurSection(OverlayItem& item) {
+    using state::editing::model::BlurArea;
+    using state::editing::model::BlurStyle;
+    auto& blur = item.blur;
+    if (!property::beginSection((ICON_BLUR "  " + "playback.refactorEditor.layers.blur"_tr()).c_str())) return;
+
+    label("playback.refactorEditor.layers.blurStyle"_tr());
+    std::string const current = std::string(overlays::blurStyleIcon(blur.style)) + "  " + overlays::blurStyleName(blur.style);
+    if (widgets::beginCombo("##blur-style", current.c_str())) {
+        for (auto const style : {BlurStyle::Gaussian, BlurStyle::Mosaic, BlurStyle::Motion, BlurStyle::Radial}) {
+            std::string const name = std::string(overlays::blurStyleIcon(style)) + "  " + overlays::blurStyleName(style);
+            if (ImGui::Selectable(name.c_str(), style == blur.style)) blur.style = style;
+        }
+        widgets::endCombo();
+    }
+    // Lengths are in percent of the frame's height; Radial's amount is how far each pixel smears towards the centre.
+    switch (blur.style) {
+    case BlurStyle::Gaussian:
+        keyRow(item, "blur-amount", ICON_BLUR, "playback.refactorEditor.layers.blurRadius"_tr(), "blurAmount", 0.0f, 20.0f, "%.1f%%", 100.0f);
+        break;
+    case BlurStyle::Mosaic:
+        keyRow(item, "blur-amount", ICON_MOSAIC, "playback.refactorEditor.layers.blurBlock"_tr(), "blurAmount", 0.0f, 20.0f, "%.1f%%", 100.0f);
+        break;
+    case BlurStyle::Motion:
+        keyRow(item, "blur-amount", ICON_MOTION, "playback.refactorEditor.layers.blurLength"_tr(), "blurAmount", 0.0f, 50.0f, "%.1f%%", 100.0f);
+        keyRow(item, "blur-angle", ICON_ROTATE, "playback.refactorEditor.layers.blurAngle"_tr(), "blurAngle", -180.0f, 180.0f, "%.1f°");
+        break;
+    case BlurStyle::Radial:
+        keyRow(item, "blur-amount", ICON_RADIAL, "playback.refactorEditor.layers.blurStrength"_tr(), "blurAmount", 0.0f, 100.0f, "%.0f%%", 100.0f);
+        break;
+    }
+
+    label("playback.refactorEditor.layers.blurArea"_tr());
+    std::string const areas[] = {
+        "playback.refactorEditor.layers.blurAreaFrame"_tr(),
+        "playback.refactorEditor.layers.rectangle"_tr(),
+        "playback.refactorEditor.layers.ellipse"_tr(),
+    };
+    int area = static_cast<int>(blur.area);
+    if (widgets::beginCombo("##blur-area", areas[std::clamp(area, 0, 2)].c_str())) {
+        for (int index = 0; index < 3; ++index) {
+            if (ImGui::Selectable(areas[index].c_str(), index == area)) blur.area = static_cast<BlurArea>(index);
+        }
+        widgets::endCombo();
+    }
+    bool const placed = blur.area != BlurArea::Frame;
+    // A Radial blur zooms towards the area's centre, so the centre shows even over the whole frame.
+    if (placed || blur.style == BlurStyle::Radial) {
+        keyRow(item, "x", ICON_POSITION, "playback.refactorEditor.layers.positionX"_tr(), "x", -50.0f, 150.0f, "%.1f%%", 100.0f);
+        keyRow(item, "y", ICON_POSITION, "playback.refactorEditor.layers.positionY"_tr(), "y", -50.0f, 150.0f, "%.1f%%", 100.0f);
+    }
+    if (placed) {
+        keyRow(item, "width", ICON_SCALE, "playback.refactorEditor.layers.width"_tr(), "width", 0.5f, 400.0f, "%.1f%%", 100.0f);
+        keyRow(item, "height", ICON_SCALE, "playback.refactorEditor.layers.height"_tr(), "height", 0.5f, 400.0f, "%.1f%%", 100.0f);
+        keyRow(item, "rotation", ICON_ROTATE, "playback.refactorEditor.layers.rotation"_tr(), "rotation", -180.0f, 180.0f, "%.1f°");
+        keyRow(item, "blur-feather", nullptr, "playback.refactorEditor.layers.blurFeather"_tr(), "blurFeather", 0.0f, 20.0f, "%.1f%%", 100.0f);
+        toggle("##blur-invert", ICON_HIDE, "playback.refactorEditor.layers.blurInvert"_tr(), blur.invert);
+        widgets::itemTooltip("playback.refactorEditor.layers.blurInvertHint"_tr().c_str());
+    }
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.layers.blurHint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+    property::endSection();
+}
 
 void LayerInspector::keyRow(
     OverlayItem&       item,

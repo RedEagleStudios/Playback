@@ -1,6 +1,7 @@
 #include "ImGuiRenderer.h"
 
 #include "playback/editor/graphics/D3D11FrameTapBackend.h"
+#include "playback/editor/graphics/D3D12BlurPass.h"
 #include "playback/editor/graphics/D3D12Compat.h"
 #include "playback/editor/graphics/D3D12Downsampler.h"
 #include "playback/editor/graphics/D3D12FrameTapBackend.h"
@@ -243,6 +244,8 @@ struct ImGuiRenderer::Impl {
     D3D12FrameTapBackend                    d3d12FrameTap{frameTap};
     // Applies the project's colour grade to the preview copy of each frame.
     D3D12Downsampler                        previewGrader;
+    // Applies the project's blur layers to the preview copy, after the grade.
+    D3D12BlurPass                           previewBlur;
     std::mutex                              captureMutex;
     std::optional<visuals::FrameTapSession> captureSession;
     uint32_t                                exportCaptureCapacity{};
@@ -1717,6 +1720,17 @@ bool ImGuiRenderer::renderInternal(
             );
             std::swap(grading.Transition.StateBefore, grading.Transition.StateAfter);
             f.commandList->ResourceBarrier(1, &grading);
+        }
+        // Blurs land on the graded picture; the pass leaves the texture in COPY_DEST, as it found it.
+        if (auto const passes = currentBlurPasses(); !passes.empty() && p.previewBlur.ready(p.device.Get())
+                                                     && p.previewBlur.supports(f.gameTexture.Get())) {
+            p.previewBlur.apply(
+                f.commandList.Get(),
+                f.gameTexture.Get(),
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                passes,
+                blurFrameAspect()
+            );
         }
     }
 

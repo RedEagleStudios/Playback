@@ -80,6 +80,10 @@ namespace Playback::ReplayEditor::Icons {
 #define ICON_ELLIPSE    "\ue076" // circle
 #define ICON_TRIANGLE   "\ue192" // triangle
 #define ICON_POLYGON    "\ue0f3" // hexagon
+#define ICON_BLUR       "\ue0b5" // droplets
+#define ICON_MOSAIC     "\ue0ff" // layout-grid
+#define ICON_MOTION     "\ue1b0" // wind
+#define ICON_RADIAL     "\ue29e" // focus
 #define ICON_MODEL      "\ue524" // cuboid
 #define ICON_FILM       "\ue0d0" // film
 #define ICON_THIRDS     "\ue0ef" // hash

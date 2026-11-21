@@ -99,6 +99,8 @@ ImU32 layerColor(state::editing::model::OverlayKind kind) {
         return theme::kLayerShape;
     case state::editing::model::OverlayKind::Model:
         return theme::kLayerModel;
+    case state::editing::model::OverlayKind::Blur:
+        return theme::kLayerBlur;
     }
     return theme::kLayerTitle;
 }
@@ -801,12 +803,13 @@ void TimelinePanel::addLayer(
     PanelContext const&                ctx,
     state::editing::model::OverlayKind kind,
     state::editing::model::ShapeKind   shape,
-    int                                points
+    int                                points,
+    state::editing::model::BlurStyle   blur
 ) {
     auto const* project = ctx.project();
     if (!project) return;
     int const tick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
-    auto      item = overlays::makeLayer(*project, kind, tick, shape, points);
+    auto      item = overlays::makeLayer(*project, kind, tick, shape, points, blur);
     if (kind == state::editing::model::OverlayKind::Model) {
         auto const file = overlays::pickModelFile();
         if (!file) return;
@@ -908,6 +911,17 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         }
         if (ImGui::MenuItem((ICON_MODEL "  " + "playback.refactorEditor.layers.addModel"_tr()).c_str())) {
             addLayer(ctx, OverlayKind::Model);
+        }
+        // Blurs act on the replay picture over their stretch of the timeline, the whole frame or an area of it.
+        if (ImGui::BeginMenu((ICON_BLUR "  " + "playback.refactorEditor.layers.addBlur"_tr()).c_str())) {
+            using state::editing::model::BlurStyle;
+            for (auto const style : {BlurStyle::Gaussian, BlurStyle::Mosaic, BlurStyle::Motion, BlurStyle::Radial}) {
+                std::string const label = std::string(overlays::blurStyleIcon(style)) + "  " + overlays::blurStyleName(style);
+                if (ImGui::MenuItem(label.c_str())) {
+                    addLayer(ctx, OverlayKind::Blur, ShapeKind::Rectangle, 3, style);
+                }
+            }
+            ImGui::EndMenu();
         }
         widgets::endAnchoredPopup();
     }

@@ -1,6 +1,7 @@
 ﻿#include "EditorController.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/graphics/BlurEffects.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/editor/graphics/ColorGrading.h"
 #include "playback/editor/graphics/FogOverride.h"
@@ -565,6 +566,7 @@ void EditorController::publishState(bool hudVisible) {
         editor::graphics::setFogOverride(std::nullopt);
         editor::graphics::setFovOverride(std::nullopt);
         editor::graphics::setColorGrading(std::nullopt);
+        editor::graphics::setBlurLayers({});
     }
     ensureProject(state.totalTicks, mActiveReplayPath);
     if (sessionActive) addRecordedCameraTracks();
@@ -601,6 +603,12 @@ void EditorController::publishState(bool hudVisible) {
         preview->overlays = *mOverlayPreview;
         state.project     = std::move(preview);
     }
+    // Blur layers act on the rendered picture, so the graphics side evaluates them per presented frame; drafts show
+    // while a control is held.
+    if (sessionActive) {
+        editor::graphics::setBlurLayers(state.project->overlays);
+        editor::graphics::setBlurFallbackTick(static_cast<double>(state.currentTick));
+    }
     state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
     if (state.cameraTimeline) {
         if (auto const shot = state.cameraTimeline->shotAt(state.currentTick)) state.activeCameraId = shot.camera->id;
@@ -617,6 +625,20 @@ void EditorController::publishState(bool hudVisible) {
         state.capabilities.videoExport
         && exporting::ExportCoordinator::isFormatAvailable(exporting::ExportFormat::Mp4Video);
     state.exportStatus      = mExportCoordinator.status();
+    // Blur areas are laid out in the export's frame while one runs; the plan is read once per export.
+    bool const exporting = mExportDriver && mExportDriver->isActive();
+    if (exporting && !mBlurExportAspectSet) {
+        if (auto const plan = mExportCoordinator.plan()) {
+            auto const& settings = plan->settings;
+            editor::graphics::setBlurExportAspect(
+                static_cast<float>(settings.resolutionX) / static_cast<float>(std::max<uint32_t>(1, settings.resolutionY))
+            );
+            mBlurExportAspectSet = true;
+        }
+    } else if (!exporting && mBlurExportAspectSet) {
+        editor::graphics::setBlurExportAspect(std::nullopt);
+        mBlurExportAspectSet = false;
+    }
     state.browser.visible   = mBrowserVisible;
     state.browser.operation = mBrowserOperation;
     state.browser.error     = mBrowserError;

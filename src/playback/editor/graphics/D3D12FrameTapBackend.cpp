@@ -3,6 +3,7 @@
 #include "playback/editor/graphics/D3D12Compat.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/graphics/D3D12BlurPass.h"
 #include "playback/editor/graphics/D3D12Downsampler.h"
 #include "playback/exporting/FrameWorkerPool.h"
 #include "playback/visuals/FramePixelBufferPool.h"
@@ -89,6 +90,9 @@ struct D3D12FrameTapBackend::Impl {
     HANDLE                  stopEvent{};
     bool                    stopping{};
     D3D12Downsampler        downsampler;
+    // Blurs the pass's output before readback; guarded by `mutex` like the rest of capture().
+    D3D12BlurPass           blur;
+    bool                    loggedBlurFailure{};
     std::atomic_uint32_t    downsampleFactorUsed{1};
     std::atomic_uint32_t    downsampleFallbacks{};
     // Readback cost is invisible to the writer stage profile because it happens before submission.
@@ -638,12 +642,13 @@ bool D3D12FrameTapBackend::capture(
 
     uint32_t const requested = mImpl->frameTap.captureDownsample();
     auto const     gain      = currentColorGain();
+    auto const     passes    = currentBlurPasses();
     bool const downsample   = requested >= 2 && sourceDesc.Width % requested == 0 && sourceDesc.Height % requested == 0;
     auto       readbackDesc = sourceDesc;
     uint32_t   factor       = 1;
-    // The GPU pass downsamples, grades, or both; without either the frame is read back as it is.
+    // The GPU pass downsamples, grades, blurs, or any of them; without one the frame is read back as it is.
     bool gpuPass = false;
-    if ((downsample || gain) && mImpl->downsampler.ready(device)) {
+    if ((downsample || gain || !passes.empty()) && mImpl->downsampler.ready(device)) {
         uint32_t const passFactor = downsample ? requested : 1;
         auto           passDesc   = sourceDesc;
         passDesc.Width            = sourceDesc.Width / passFactor;
@@ -709,6 +714,22 @@ bool D3D12FrameTapBackend::capture(
             mImpl->frameTap.fail(*capture, FrameTapError::BackendUnavailable, "D3D12 downsample dispatch failed");
             slot->state = Impl::SlotState::Retired;
             return false;
+        }
+        if (!passes.empty()) {
+            // The pass output is in UNORDERED_ACCESS here and the blur leaves it that way.
+            ID3D12Resource* const passTexture = slot->downsampleTexture.Get();
+            bool const            blurred     = mImpl->blur.ready(device) && mImpl->blur.supports(passTexture)
+                                    && mImpl->blur.apply(
+                                        commandList,
+                                        passTexture,
+                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                        passes,
+                                        blurFrameAspect()
+                                    );
+            if (!blurred && !mImpl->loggedBlurFailure) {
+                mImpl->loggedBlurFailure = true;
+                getLogger().warn("Blur layers could not be applied on the GPU; the export continues without them");
+            }
         }
         transition(
             slot->downsampleTexture.Get(),

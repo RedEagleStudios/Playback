@@ -72,6 +72,8 @@ private:
     bool mResumeAfterCutJump{};
     // A camera's properties being dragged in the inspector (PreviewCameraProperties), by camera id.
     std::optional<std::pair<std::string, state::editing::model::CameraProperties>> mCameraPreview;
+    // Whether the running export's frame aspect has been handed to the blur pass.
+    bool mBlurExportAspectSet{};
     int                                            mProjectTotalTicks{-1};
     bool                                           mExportTickedBeforeClientUpdate{};
     bool                                           mExportTickReentered{};

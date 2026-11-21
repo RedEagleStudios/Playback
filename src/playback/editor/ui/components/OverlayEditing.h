@@ -7,21 +7,24 @@
 #include <string>
 #include <vector>
 
-// Shared by the timeline and the inspector: making, finding and committing title, shape and model layers.
+// Shared by the timeline and the inspector: making, finding and committing title, shape, model and blur layers.
 namespace playback::editor::ui::overlays {
 
+using state::editing::model::BlurStyle;
 using state::editing::model::OverlayItem;
 using state::editing::model::OverlayKind;
 using state::editing::model::ShapeKind;
 
 // A new layer of `kind` from `tick` for five seconds, named "<kind> <n>". A model stands a few blocks in front of the
-// camera, a shape of `shape` (with `points` corners for a polygon) sits in the frame's centre.
+// camera, a shape of `shape` (with `points` corners for a polygon) sits in the frame's centre, a blur of `blur` covers
+// the whole frame.
 [[nodiscard]] OverlayItem makeLayer(
     state::editing::model::EditorStateExt const& project,
     OverlayKind                                  kind,
     int                                          tick,
     ShapeKind                                    shape  = ShapeKind::Rectangle,
-    int                                          points = 3
+    int                                          points = 3,
+    state::editing::model::BlurStyle             blur   = state::editing::model::BlurStyle::Gaussian
 );
 
 [[nodiscard]] OverlayItem const* find(state::editing::model::EditorStateExt const& project, std::string const& id);
@@ -37,6 +40,10 @@ void endPreview(PanelContext const& ctx);
 
 // The layer's kind as a timeline glyph.
 [[nodiscard]] char const* icon(OverlayItem const& item);
+
+// A blur style's name and glyph, for menus and the inspector.
+[[nodiscard]] std::string blurStyleName(BlurStyle style);
+[[nodiscard]] char const* blurStyleIcon(BlurStyle style);
 
 // Asks for a .mimodel file; its UTF-8 path, or none when cancelled.
 [[nodiscard]] std::optional<std::string> pickModelFile();
