@@ -1005,7 +1005,8 @@ private:
     // characters in the replay world.
     case OverlayKind::Blur:
     case OverlayKind::Light:
-    case OverlayKind::StandIn: return false;
+    case OverlayKind::StandIn:
+    case OverlayKind::Screen: return false;
     }
     return false;
 }

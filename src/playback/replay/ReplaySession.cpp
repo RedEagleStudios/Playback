@@ -1,6 +1,7 @@
 #include "ReplaySession.h"
 
 #include "BlockStateCondition.h"
+#include "ScreenMedia.h"
 #include "StandIns.h"
 
 #include "playback/Playback.h"
@@ -20,6 +21,7 @@
 #include "playback/visuals/ReplayHudHooks.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
 
+#include "ll/api/i18n/I18n.h"
 #include "ll/api/service/Bedrock.h"
 #include "ll/api/service/TargetedBedrock.h"
 #include "ll/api/thread/ServerThreadExecutor.h"
@@ -100,6 +102,7 @@
 #include "mc/network/packet/RemoveObjectivePacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
+#include "mc/network/packet/SetActorDataPacket.h"
 #include "mc/network/packet/SetActorLinkPacket.h"
 #include "mc/network/packet/SetDisplayObjectivePacket.h"
 #include "mc/network/packet/SetTimePacket.h"
@@ -125,6 +128,8 @@
 #include "mc/world/actor/ActorCategory.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/DataItem.h"
+#include "mc/world/actor/SynchedActorDataEntityWrapper.h"
 #include "mc/world/actor/animation/ActorAnimationControllerPlayer.h"
 #include "mc/world/actor/animation/ActorAnimationControllerStatePlayer.h"
 #include "mc/world/actor/animation/ActorAnimationPlayer.h"
@@ -138,6 +143,9 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/actor/state/PropertyComponent.h"
+#include "mc/world/actor/state/PropertyGroup.h"
+#include "mc/world/actor/state/PropertySyncData.h"
 #include "mc/world/attribute/Attribute.h"
 #include "mc/world/attribute/AttributeData.h"
 #include "mc/world/attribute/AttributeInstance.h"
@@ -269,6 +277,7 @@ namespace playback::replay {
 using namespace playback::action;
 using namespace playback::packet;
 using namespace playback::record;
+using namespace ll::i18n_literals;
 
 namespace {
 
@@ -1032,6 +1041,7 @@ void ReplaySession::clearReplayData() {
     endPoseClips(true);
     // The cached recording reads go with the replay; the characters only while the world can still take packets.
     if (mReplayPlayer && mNetworkHandler) despawnStandIns();
+    releaseScreens();
     mStandIns.reset();
     {
         std::lock_guard lock(mStandInSpansMutex);
@@ -2630,6 +2640,7 @@ void ReplaySession::endExportTimeline() {
     mExportTargetTick       = -1;
     mExportTimelinePhase    = ReplayExportTimelinePhase::Inactive;
     mExportCameraViewpoint.reset();
+    mExportScreenTime.reset();
     if (wasActive) {
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
         mObserverServerPositionDirty = false;
@@ -2757,6 +2768,13 @@ void ReplaySession::updateFrame() {
     applyFlatPreview();
     mVisualOverrides.apply();
     resumeSeekAnimationClips();
+    // Screen pictures at the frame's instant: the export's exact one, or the preview's between its ticks. A seek or a
+    // loading snapshot leaves them as they are until the world settles.
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) {
+        if (mExportScreenTime) updateScreens(static_cast<double>(mExportScreenTime->value()), true);
+    } else if (!isSeekPending() && !mPendingSnapshotApply && !mPendingReplayDimension && !mChunkInjectionPending) {
+        if (auto const time = getCameraRenderSampleTime()) updateScreens(static_cast<double>(time->value()), false);
+    }
 }
 
 void ReplaySession::resumeSeekAnimationClips() {
@@ -3078,6 +3096,7 @@ void ReplaySession::tick() {
         refreshReplayPlayerRoster();
         refreshReplaySubjectBinding();
         refreshReplayEntityList();
+        refreshScreenTargets();
         if (mStandInSpansWanted.exchange(false, std::memory_order_acq_rel)) (void)standInRoster();
         if (mSeekTargetTick < 0) updateStandIns(false);
 
@@ -6701,6 +6720,8 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         }
     }
 
+    filterScreenPacket(packetId, *packet);
+
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
 
@@ -8251,6 +8272,502 @@ void ReplaySession::sendStandInPacket(std::shared_ptr<Packet> packet) {
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+}
+
+// Screen layers. A layer's picture goes into the texture its screen draws with: while the layer shows, the screen's
+// variant (TVs) or skin_id (monitors, which are also switched on) is held on a texture slot of its kind, and that slot's
+// texture in the game's TextureGroup is replaced. The picture is so lit, hidden behind what stands before it and
+// exported like the rest of the world. Recorded entity data for a held screen is noted and replaced by the slot's, and
+// the recorded look goes back when the layer lets go.
+namespace {
+
+constexpr std::string_view TurnedOnProperty         = "re_furn:turned_on";
+constexpr auto             ScreenResendInterval     = std::chrono::milliseconds{100};
+constexpr int              ScreenTargetRefreshTicks = 5;
+
+[[nodiscard]] std::optional<int64_t> parseScreenId(std::string const& text) {
+    int64_t    value{};
+    auto const end    = text.data() + text.size();
+    auto const result = std::from_chars(text.data(), end, value);
+    if (text.empty() || result.ec != std::errc{} || result.ptr != end) return std::nullopt;
+    return value;
+}
+
+[[nodiscard]] std::string screenLabel(std::string_view key) {
+    if (key == "mediumStandTv") return "playback.refactorEditor.screen.kinds.mediumStandTv"_tr();
+    if (key == "mediumHangingTv") return "playback.refactorEditor.screen.kinds.mediumHangingTv"_tr();
+    if (key == "bigStandTv") return "playback.refactorEditor.screen.kinds.bigStandTv"_tr();
+    if (key == "bigHangingTv") return "playback.refactorEditor.screen.kinds.bigHangingTv"_tr();
+    if (key == "monitor") return "playback.refactorEditor.screen.kinds.monitor"_tr();
+    return "playback.refactorEditor.screen.kinds.wideMonitor"_tr();
+}
+
+// What a screen entity shows now.
+struct ScreenValues {
+    int                     variant{};
+    int                     skin{};
+    std::optional<bool>     on;
+    std::optional<uint32_t> onIndex;
+};
+
+[[nodiscard]] ScreenValues readScreenValues(Actor& actor) {
+    ScreenValues values;
+    values.variant    = actor.getVariant();
+    auto const skinId = static_cast<ushort>(ActorDataIDs::SkinId);
+    if (actor.mEntityData->hasData(skinId)) values.skin = actor.mEntityData->getInt(skinId);
+    if (auto* const properties = actor.getEntityContext().tryGetComponent<PropertyComponent>().as_ptr()) {
+        auto const& indexes = *properties->mPropertyGroup->mPropertyIndexesByString;
+        if (auto const found = indexes.find(std::string{TurnedOnProperty}); found != indexes.end()) {
+            values.onIndex = static_cast<uint32_t>(found->second);
+            values.on      = properties->tryGetBool(HashedString::computeHash(TurnedOnProperty));
+        }
+    }
+    return values;
+}
+
+// Notes the recorded values in a packet for a held screen and puts the slot's in their place. A spawn that leaves one
+// out starts at its default, so the slot's goes in anyway.
+void holdScreenData(
+    ScreenHold&                             hold,
+    std::vector<std::unique_ptr<DataItem>>& items,
+    PropertySyncData&                       properties,
+    bool                                    spawn
+) {
+    bool const tv       = isTvGroup(hold.group);
+    auto const id       = tv ? ActorDataIDs::Variant : ActorDataIDs::SkinId;
+    auto&      recorded = tv ? hold.recordedVariant : hold.recordedSkin;
+    bool       found    = false;
+    for (auto& item : items) {
+        if (!item || item->getId() != static_cast<ushort>(id)) continue;
+        auto value = item->getData<int>();
+        if (!value) continue;
+        recorded = *value;
+        item->setData(int{hold.slot});
+        found = true;
+    }
+    if (spawn && !found) {
+        recorded = 0;
+        items.push_back(DataItem::create(id, int{hold.slot}));
+    }
+    if (tv || !hold.onIndex) return;
+    found = false;
+    for (auto& entry : *properties.mIntEntries) {
+        if (entry.mPropertyIndex != *hold.onIndex) continue;
+        hold.recordedOn = entry.mData != 0;
+        entry.mData     = 1;
+        found           = true;
+    }
+    if (spawn && !found) properties.mIntEntries->push_back({*hold.onIndex, 1});
+}
+
+// The slot a layer's screen shows its picture through: its own as recorded if no other screen shows that, else one no
+// screen shows, else one only screens without a layer show (they then show the picture too). Never one another layer
+// of the same kind holds. -1 when every slot is held.
+[[nodiscard]] int chooseScreenSlot(
+    ScreenRuntime const& runtime,
+    std::string const&   layerId,
+    ScreenShowing const& showing,
+    int                  own,
+    bool&                shared
+) {
+    auto const claimed = [&](int slot) {
+        return std::ranges::any_of(runtime.showing, [&](auto const& entry) {
+            return entry.first != layerId && entry.second.group == showing.group && entry.second.slot == slot;
+        });
+    };
+    auto const shownElsewhere = [&](int slot) {
+        return std::ranges::any_of(runtime.seen, [&](auto const& entry) {
+            return entry.first != showing.target && entry.second.present && entry.second.type->group == showing.group
+                && entry.second.shownSlot == slot && !runtime.held.contains(entry.first);
+        });
+    };
+    auto const       slots = screenSlots(showing.group);
+    std::vector<int> order;
+    if (std::ranges::find(slots, own) != slots.end()) order.push_back(own);
+    for (int const slot : slots) {
+        if (slot != own) order.push_back(slot);
+    }
+    for (int const slot : order) {
+        if (claimed(slot) || shownElsewhere(slot)) continue;
+        shared = false;
+        return slot;
+    }
+    for (int const slot : order) {
+        if (claimed(slot)) continue;
+        shared = true;
+        return slot;
+    }
+    return -1;
+}
+
+} // namespace
+
+void ReplaySession::setScreens(std::vector<OverlayItem> const& layers) {
+    std::lock_guard lock(mScreenLayersMutex);
+    size_t          count = 0;
+    bool            same  = true;
+    for (auto const& layer : layers) {
+        if (layer.kind != OverlayKind::Screen) continue;
+        same = same && count < mScreenLayers.size() && mScreenLayers[count] == layer;
+        ++count;
+    }
+    if (same && count == mScreenLayers.size()) return;
+    mScreenLayers.clear();
+    for (auto const& layer : layers) {
+        if (layer.kind == OverlayKind::Screen) mScreenLayers.push_back(layer);
+    }
+    mScreenLayersChanged = true;
+}
+
+std::vector<ReplayScreenTarget> ReplaySession::screenTargets() const {
+    std::lock_guard lock(mScreenTargetsMutex);
+    return mScreenTargets;
+}
+
+std::optional<double> ReplaySession::screenMediaDuration(std::string const& file) const {
+    if (file.empty() || isStillImageFile(mediaPath(file))) return std::nullopt;
+    auto const probe = mMediaProbes.find(file);
+    if (!probe.info || probe.info->still) return std::nullopt;
+    return probe.info->duration;
+}
+
+void ReplaySession::setExportScreenTime(std::optional<visuals::ReplaySampleTime> time) {
+    mExportScreenTime = time;
+    if (time && mActive && mReplayWorldJoined && mReplayPlayer && mNetworkHandler) {
+        updateScreens(static_cast<double>(time->value()), true);
+    }
+}
+
+void ReplaySession::refreshScreenTargets() {
+    if (++mScreenTargetsAge < ScreenTargetRefreshTicks || !mReplayPlayer) return;
+    mScreenTargetsAge = 0;
+    auto& level       = mReplayPlayer->getLevel();
+    if (mScreens) {
+        for (auto& [_, seen] : mScreens->seen) seen.present = false;
+    }
+    for (auto const& id : mRecordedEntityIds) {
+        auto* const actor = level.fetchEntity(id, false);
+        if (!actor || actor->mRemoved) continue;
+        auto const* type = screenTypeOf(actor->getTypeName());
+        if (!type) continue;
+        if (!mScreens) mScreens = std::make_unique<ScreenRuntime>();
+        auto const values = readScreenValues(*actor);
+        auto&      seen   = mScreens->seen[id.rawID];
+        seen.type         = type;
+        seen.position     = actor->getPosition();
+        seen.present      = true;
+        seen.shownSlot    = isTvGroup(type->group) ? (values.variant > 0 ? values.variant : -1)
+                          : values.on.value_or(true) ? values.skin
+                                                     : -1;
+    }
+    if (!mScreens) return;
+
+    std::vector<ReplayScreenTarget> targets;
+    targets.reserve(mScreens->seen.size());
+    for (auto const& [id, seen] : mScreens->seen) {
+        targets.push_back({
+            std::to_string(id),
+            std::string{screenGroupKey(seen.type->group)},
+            screenLabel(seen.type->labelKey),
+            seen.position,
+            seen.present,
+        });
+    }
+    auto const camera     = mReplayPlayer->getPosition();
+    auto const distanceSq = [&camera](ReplayScreenTarget const& target) {
+        float const dx = target.position.x - camera.x;
+        float const dy = target.position.y - camera.y;
+        float const dz = target.position.z - camera.z;
+        return dx * dx + dy * dy + dz * dz;
+    };
+    std::ranges::sort(targets, [&](ReplayScreenTarget const& a, ReplayScreenTarget const& b) {
+        if (a.present != b.present) return a.present;
+        return distanceSq(a) < distanceSq(b);
+    });
+    std::lock_guard lock(mScreenTargetsMutex);
+    mScreenTargets = std::move(targets);
+}
+
+std::shared_ptr<MediaFrame const>
+ReplaySession::screenPicture(ScreenShowing& showing, OverlayItem const& layer, double tick, bool exact) {
+    auto&          runtime = *mScreens;
+    auto const     size    = screenPictureSize(showing.group);
+    uint32_t const width   = size.first;
+    uint32_t const height  = size.second;
+    auto const     path    = mediaPath(showing.file);
+    auto const     unreadable = [&] {
+        if (runtime.warned.insert("file:" + showing.file).second) {
+            getLogger().warn("Screen layer '{}' cannot show {}: the file cannot be read", layer.name, showing.file);
+        }
+    };
+    auto const stillPicture = [&]() -> std::shared_ptr<MediaFrame const> {
+        if (!showing.still.valid()) {
+            showing.still =
+                std::async(std::launch::async, [path, width, height, fit = showing.fit] {
+                    return loadStillFrame(path, width, height, fit);
+                }).share();
+        }
+        if (!exact && showing.still.wait_for(std::chrono::seconds{0}) != std::future_status::ready) return nullptr;
+        auto picture = showing.still.get();
+        if (!picture) unreadable();
+        return picture;
+    };
+
+    if (isStillImageFile(path)) return stillPicture();
+    auto const probe =
+        exact ? MediaProbeCache::Result{true, mMediaProbes.get(showing.file)} : mMediaProbes.find(showing.file);
+    if (!probe.ready) return nullptr;
+    if (!probe.info) {
+        unreadable();
+        return nullptr;
+    }
+    if (probe.info->still) return stillPicture();
+    if (!showing.video) showing.video = std::make_unique<VideoStream>(path, *probe.info, width, height, showing.fit);
+    // The layer's start shows sourceOffset; a looping video starts again at its end, another holds its last frame.
+    double seconds = layer.screen.sourceOffset + (tick - layer.startTick) / 20.0;
+    if (layer.screen.loop && probe.info->duration > 0.0) {
+        seconds = std::fmod(std::max(0.0, seconds), probe.info->duration);
+    }
+    return showing.video->frameAt(seconds, exact);
+}
+
+void ReplaySession::holdScreen(ScreenShowing const& showing, Actor& actor) {
+    auto&      runtime = *mScreens;
+    auto const values  = readScreenValues(actor);
+    auto [entry, created] = runtime.held.try_emplace(showing.target);
+    auto& hold            = entry->second;
+    if (created) {
+        hold.group           = showing.group;
+        hold.recordedVariant = values.variant;
+        hold.recordedSkin    = values.skin;
+        hold.recordedOn      = values.on;
+    }
+    hold.slot      = showing.slot;
+    hold.onIndex   = values.onIndex;
+    hold.runtimeId = actor.getRuntimeID().rawID;
+    bool const tv  = isTvGroup(hold.group);
+    if (tv ? values.variant == hold.slot : values.skin == hold.slot && values.on.value_or(true)) {
+        hold.sends = 0;
+        return;
+    }
+    auto const now = std::chrono::steady_clock::now();
+    if (now - hold.sentAt < ScreenResendInterval) return;
+    hold.sentAt = now;
+    if (++hold.sends == 30 && runtime.warned.insert("hold:" + std::to_string(showing.target)).second) {
+        getLogger().warn("Screen {} does not take the texture slot {} its Screen layer gives it", showing.target, hold.slot);
+    }
+    sendScreenData(
+        hold.runtimeId,
+        tv ? std::optional{hold.slot} : std::nullopt,
+        tv ? std::nullopt : std::optional{hold.slot},
+        !tv && hold.onIndex ? std::optional{std::pair{*hold.onIndex, true}} : std::nullopt
+    );
+}
+
+void ReplaySession::releaseScreenHold(int64_t target, ScreenHold const& hold) {
+    if (!mReplayPlayer || !mNetworkHandler) return;
+    auto* const actor = mReplayPlayer->getLevel().fetchEntity(ActorUniqueID{target}, false);
+    if (!actor || actor->mRemoved) return;
+    bool const tv = isTvGroup(hold.group);
+    sendScreenData(
+        actor->getRuntimeID().rawID,
+        tv ? hold.recordedVariant : std::nullopt,
+        tv ? std::nullopt : hold.recordedSkin,
+        !tv && hold.onIndex && hold.recordedOn ? std::optional{std::pair{*hold.onIndex, *hold.recordedOn}} : std::nullopt
+    );
+}
+
+void ReplaySession::sendScreenData(
+    uint64_t                                 runtimeId,
+    std::optional<int>                       variant,
+    std::optional<int>                       skin,
+    std::optional<std::pair<uint32_t, bool>> turnedOn
+) {
+    if (!mNetworkHandler || (!variant && !skin && !turnedOn)) return;
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::SetActorData);
+    if (!packet || !packet->mHandler) return;
+    auto& data = static_cast<SetActorDataPacket&>(*packet);
+    data.mId   = ActorRuntimeID{runtimeId};
+    if (variant) data.mPackedItems->push_back(DataItem::create(ActorDataIDs::Variant, int{*variant}));
+    if (skin) data.mPackedItems->push_back(DataItem::create(ActorDataIDs::SkinId, int{*skin}));
+    if (turnedOn) data.mSynchedProperties->mIntEntries->push_back({turnedOn->first, turnedOn->second ? 1 : 0});
+    mInjectingPacket.store(packet.get(), std::memory_order_release);
+    InjectionReset reset{mInjectingPacket};
+    packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+}
+
+void ReplaySession::filterScreenPacket(MinecraftPacketIds packetId, Packet& packet) {
+    if (!mScreens || mScreens->held.empty()) return;
+    auto& held = mScreens->held;
+    if (packetId == MinecraftPacketIds::SetActorData) {
+        auto& data = static_cast<SetActorDataPacket&>(packet);
+        for (auto& [_, hold] : held) {
+            if (hold.runtimeId != data.mId->rawID) continue;
+            holdScreenData(hold, *data.mPackedItems, *data.mSynchedProperties, false);
+            return;
+        }
+    } else if (packetId == MinecraftPacketIds::AddActor) {
+        // A seek or a snapshot spawns the screen again: it comes in on its slot.
+        auto&      add  = static_cast<AddActorPacket&>(packet);
+        auto const hold = held.find(add.mEntityId->rawID);
+        if (hold == held.end()) return;
+        hold->second.runtimeId = add.mRuntimeId->rawID;
+        holdScreenData(hold->second, *add.mData->mData, *add.mSynchedProperties, true);
+    }
+}
+
+void ReplaySession::updateScreens(double tick, bool exact) {
+    {
+        std::lock_guard lock(mScreenLayersMutex);
+        if (mScreenLayersChanged) {
+            mScreenLayersChanged = false;
+            if (!mScreens) mScreens = std::make_unique<ScreenRuntime>();
+            mScreens->layers = mScreenLayers;
+        }
+    }
+    if (!mScreens || !mReplayPlayer || !mNetworkHandler) return;
+    auto& runtime = *mScreens;
+    if (runtime.layers.empty() && runtime.showing.empty() && runtime.held.empty()) return;
+    auto& level = mReplayPlayer->getLevel();
+
+    // The topmost active layer on each screen the world has now.
+    struct Wanted {
+        OverlayItem const* layer{};
+        int64_t            target{};
+        Actor*             actor{};
+        ScreenGroup        group{};
+    };
+    std::vector<Wanted> wanted;
+    auto const note = [&](std::string const& layerId, std::string const& reason) {
+        if (runtime.warned.insert("diag:" + layerId + ":" + reason).second) {
+            getLogger().debug("Screen layer {}: {} (tick {:.1f})", layerId, reason, tick);
+        }
+    };
+    for (auto layer = runtime.layers.rbegin(); layer != runtime.layers.rend(); ++layer) {
+        if (!layer->activeAt(tick) || layer->screen.file.empty()) continue;
+        auto const target = parseScreenId(layer->screen.target);
+        if (!target || std::ranges::any_of(wanted, [&](Wanted const& other) { return other.target == *target; })) {
+            note(layer->id, "no target");
+            continue;
+        }
+        auto* const actor = level.fetchEntity(ActorUniqueID{*target}, false);
+        if (!actor || actor->mRemoved) {
+            note(layer->id, "screen entity not loaded");
+            continue;
+        }
+        auto const* type = screenTypeOf(actor->getTypeName());
+        if (!type) {
+            note(layer->id, "entity is not a screen: " + actor->getTypeName());
+            continue;
+        }
+        wanted.push_back({&*layer, *target, actor, type->group});
+    }
+
+    // Layers that ended, or moved to another screen, let go of theirs (their decoders stop).
+    std::erase_if(runtime.showing, [&](auto const& entry) {
+        auto const want = std::ranges::find_if(wanted, [&](Wanted const& other) { return other.layer->id == entry.first; });
+        return want == wanted.end() || want->target != entry.second.target || want->group != entry.second.group;
+    });
+
+    for (auto const& want : wanted) {
+        auto const& layer     = *want.layer;
+        auto const& settings  = layer.screen;
+        auto [entry, created] = runtime.showing.try_emplace(layer.id);
+        auto& showing         = entry->second;
+        if (created) {
+            showing.target = want.target;
+            showing.group  = want.group;
+        }
+        if (showing.file != settings.file || showing.fit != settings.fit) {
+            showing.video.reset();
+            showing.still = {};
+            showing.file  = settings.file;
+            showing.fit   = settings.fit;
+        }
+        if (showing.slot < 0) {
+            auto const held   = runtime.held.find(want.target);
+            auto const values = readScreenValues(*want.actor);
+            bool const tv     = isTvGroup(want.group);
+            int const  own    = held != runtime.held.end()
+                                  ? (tv ? held->second.recordedVariant : held->second.recordedSkin).value_or(-1)
+                                  : (tv ? values.variant : values.skin);
+            bool       shared = false;
+            showing.slot      = chooseScreenSlot(runtime, layer.id, showing, own, shared);
+            if (showing.slot < 0) {
+                if (runtime.warned.insert("slots:" + layer.id).second) {
+                    getLogger().warn(
+                        "Screen layer '{}' is not shown: other Screen layers hold every {} texture",
+                        layer.name,
+                        screenGroupKey(want.group)
+                    );
+                }
+                continue;
+            }
+            if (shared && runtime.warned.insert("shared:" + layer.id).second) {
+                getLogger().info(
+                    "Screen layer '{}' shares its texture with another {} in view, which shows its picture too",
+                    layer.name,
+                    screenGroupKey(want.group)
+                );
+            }
+            runtime.textures.prepare(showing.group, showing.slot);
+        }
+        auto const picture = screenPicture(showing, layer, tick, exact);
+        if (!picture) {
+            note(layer.id, "picture not ready");
+            continue;
+        }
+        note(layer.id, std::format("picture {}x{} on slot {}", picture->width, picture->height, showing.slot));
+        holdScreen(showing, *want.actor);
+        showing.holding        = true;
+        float const brightness = layer.channels.empty() ? settings.brightness
+                                                        : state::editing::model::overlayAt(layer, tick).screen.brightness;
+        if (!runtime.textures.show(showing.group, showing.slot, picture, brightness)) note(layer.id, "texture not replaced");
+        else note(layer.id, "texture replaced");
+    }
+
+    // Screens no layer holds any more get their recorded look back, and slots no layer shows on their own picture.
+    for (auto it = runtime.held.begin(); it != runtime.held.end();) {
+        bool const kept = std::ranges::any_of(runtime.showing, [&](auto const& entry) {
+            return entry.second.holding && entry.second.target == it->first;
+        });
+        if (kept) {
+            ++it;
+            continue;
+        }
+        releaseScreenHold(it->first, it->second);
+        it = runtime.held.erase(it);
+    }
+    std::set<std::pair<ScreenGroup, int>> shown;
+    for (auto const& [_, showing] : runtime.showing) {
+        if (showing.slot >= 0) shown.emplace(showing.group, showing.slot);
+    }
+    for (auto const& [group, slot] : runtime.slotsShown) {
+        if (!shown.contains({group, slot})) runtime.textures.restore(group, slot);
+    }
+    runtime.slotsShown = std::move(shown);
+}
+
+void ReplaySession::releaseScreens() {
+    if (mScreens) {
+        for (auto const& [target, hold] : mScreens->held) releaseScreenHold(target, hold);
+        // The decoders stop before the textures go back.
+        mScreens->showing.clear();
+        mScreens->textures.restoreAll();
+        mScreens.reset();
+    }
+    {
+        std::lock_guard lock(mScreenLayersMutex);
+        mScreenLayers.clear();
+        mScreenLayersChanged = false;
+    }
+    {
+        std::lock_guard lock(mScreenTargetsMutex);
+        mScreenTargets.clear();
+    }
+    mScreenTargetsAge = 0;
+    mExportScreenTime.reset();
+    mMediaProbes.clear();
 }
 
 } // namespace playback::replay

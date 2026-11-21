@@ -215,6 +215,35 @@
                 "offHand": "Off hand",
                 "layerHint": "Moving the layer on the timeline changes when it plays; trimming it changes which part of the recording plays."
             },
+            "screen": {
+                "add": "Show a photo or video on a screen...",
+                "defaultName": "Screen {}",
+                "title": "Screen",
+                "target": "Screen",
+                "targetAt": "{} at {}, {}, {}",
+                "noTarget": "Choose a screen",
+                "noScreens": "No TVs or monitors from the furniture add-on are in the world here.",
+                "targetAbsent": "This screen is not in the world at the playhead; the picture shows once it is.",
+                "file": "Photo or video",
+                "mediaFiles": "Photos and videos",
+                "fit": "Fit",
+                "fitFill": "Fill (crop to cover)",
+                "fitFit": "Fit (black bars)",
+                "fitStretch": "Stretch",
+                "videoStart": "Video starts at",
+                "videoLength": "Video length {}",
+                "loop": "Loop the video",
+                "brightness": "Brightness",
+                "hint": "The picture replaces the screen's own picture in the world, so it is lit, hidden by what stands in front of it and exported with the world. Video plays without sound. Trimming the layer's start moves the video with the edge.",
+                "kinds": {
+                    "mediumStandTv": "Medium TV (stand)",
+                    "mediumHangingTv": "Medium TV (wall)",
+                    "bigStandTv": "Big TV (stand)",
+                    "bigHangingTv": "Big TV (wall)",
+                    "monitor": "Monitor",
+                    "wideMonitor": "Wide monitor"
+                }
+            },
             "keyframes": {
                 "previous": "Previous key",
                 "next": "Next key",
@@ -229,6 +258,7 @@
                 "deleteKey": "Delete key"
             },
             "properties": {
+                "screenBrightness": "Screen brightness",
                 "standInX": "Stand-in X",
                 "standInY": "Stand-in Y",
                 "standInZ": "Stand-in Z",

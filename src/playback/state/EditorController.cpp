@@ -610,6 +610,7 @@ void EditorController::publishState(bool hudVisible) {
         session.setPoseClips(state::editing::model::poseClipsFrom(mProject.poseKeys, mProject.totalTicks));
         // The drafted layers while a control is held, so a Stand-in follows the edit as it is made.
         session.setStandIns(mOverlayPreview ? *mOverlayPreview : mProject.overlays);
+        session.setScreens(mOverlayPreview ? *mOverlayPreview : mProject.overlays);
         state.installedGlobalPacks = session.installedGlobalPacks();
     }
     state.project = std::make_shared<state::editing::model::EditorStateExt>(mProject);

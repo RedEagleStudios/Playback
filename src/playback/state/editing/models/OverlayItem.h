@@ -15,7 +15,7 @@ namespace playback::state::editing::model {
 // (a Mine-imator file, or a Minecraft block or item), a blur of the picture, a light on it, or a Stand-in (a recorded
 // player's actions played again by another character). Items later in EditorStateExt::overlays draw on top of earlier
 // ones; blurs and lights act on the replay picture, in layer order, under every title, shape and model.
-enum class OverlayKind : uint8_t { Title, Shape, Model, Blur, Light, StandIn };
+enum class OverlayKind : uint8_t { Title, Shape, Model, Blur, Light, StandIn, Screen };
 
 // Polygon: a regular polygon of `points` corners (3 is a triangle; many approach a circle).
 enum class ShapeKind : uint8_t { Rectangle, Ellipse, Polygon };
@@ -178,6 +178,30 @@ struct StandInSettings {
     bool operator==(StandInSettings const&) const = default;
 };
 
+// How a picture fills a screen whose shape differs from it.
+enum class ScreenFit : uint8_t { Fill, Fit, Stretch };
+
+// A Screen layer shows a photo or video from a local file on one of the furniture add-on's screens (medium TV, big TV,
+// monitor, wide monitor) placed in the replay world, from the layer's start to its end. The picture replaces the
+// screen's own texture in the game, so it is lit, hidden behind what stands in front of it and exported as the world is.
+struct ScreenSettings {
+    // The screen: the recorded unique id of its entity, as decimal text; empty until one is chosen.
+    std::string target;
+    // How the screen was named when chosen ("Big TV at 12, 64, -30"), shown when the replay does not have it loaded.
+    std::string targetLabel;
+    // An image (png, jpg, bmp, gif, webp, tiff) or a video (mp4, mov, mkv, webm, avi, m4v) by absolute path.
+    std::string file;
+    ScreenFit   fit{ScreenFit::Fill};
+    // Seconds into the video at the layer's start; trimming the layer's start moves it with the edge.
+    float sourceOffset{};
+    // A video shorter than the layer starts again; otherwise it holds its last frame.
+    bool loop{true};
+    // Percent of the picture's brightness (keyable as screenBrightness).
+    float brightness{100.0f};
+
+    bool operator==(ScreenSettings const&) const = default;
+};
+
 struct OverlayItem {
     std::string id;
     std::string name;
@@ -197,6 +221,7 @@ struct OverlayItem {
     BlurSettings     blur;
     LightSettings    light;
     StandInSettings  standIn;
+    ScreenSettings   screen;
     // Keyed numeric properties (overlayProperty names), each on its own. Key ticks count from startTick, so moving
     // the layer moves its keys with it.
     ValueChannels channels;
@@ -255,6 +280,7 @@ struct OverlayItem {
     if (name == "standInY") return &item.standIn.offset.y;
     if (name == "standInZ") return &item.standIn.offset.z;
     if (name == "standInTurn") return &item.standIn.turn;
+    if (name == "screenBrightness") return &item.screen.brightness;
     return nullptr;
 }
 
@@ -278,6 +304,9 @@ inline void setOverlayStart(OverlayItem& item, int startTick) {
     item.startTick  = startTick;
     if (shift == 0) return;
     if (item.kind == OverlayKind::StandIn) item.standIn.sourceTick = std::max(0, item.standIn.sourceTick + shift);
+    if (item.kind == OverlayKind::Screen) {
+        item.screen.sourceOffset = std::max(0.0f, item.screen.sourceOffset + static_cast<float>(shift) / 20.0f);
+    }
     for (auto& [name, channel] : item.channels) {
         ValueChannel moved;
         for (auto const& [tick, key] : channel) moved.emplace(tick - shift, key);

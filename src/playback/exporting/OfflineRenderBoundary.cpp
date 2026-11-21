@@ -725,9 +725,12 @@ void OfflineRenderBoundary::updateExportCamera(ExportFramePlan const& frame) {
     auto const sample = clockSample(frame);
     if (!sample) {
         mReplay.setExportCameraViewpoint(std::nullopt);
+        mReplay.setExportScreenTime(std::nullopt);
         return;
     }
     updateExportCameraAt(sample->replayTime, !mTickGateSuspendedForDimension);
+    // Screen layers put the picture of this frame's exact instant into the screens' textures before it renders.
+    mReplay.setExportScreenTime(sample->replayTime);
 }
 
 void OfflineRenderBoundary::updateExportCameraAt(visuals::ReplaySampleTime const& time, bool allowObserverFallback) {

@@ -37,6 +37,8 @@ std::string defaultName(OverlayKind kind, ShapeKind shape, int points, BlurStyle
         return "playback.refactorEditor.layers.defaultBlur"_tr(lightStyleName(light), number);
     case OverlayKind::StandIn:
         return "playback.refactorEditor.standIn.defaultName"_tr(number);
+    case OverlayKind::Screen:
+        return "playback.refactorEditor.screen.defaultName"_tr(number);
     case OverlayKind::Shape:
         break;
     }
@@ -239,6 +241,8 @@ char const* icon(OverlayItem const& item) {
         return lightStyleIcon(item.light.style);
     case OverlayKind::StandIn:
         return ICON_STANDIN;
+    case OverlayKind::Screen:
+        return ICON_SCREEN;
     case OverlayKind::Shape:
         break;
     }
@@ -282,6 +286,22 @@ std::optional<std::string> pickModelFile() {
 
 std::optional<std::string> pickSkinFile() {
     return pickFile("playback.refactorEditor.standIn.skinFiles"_tr(), L"*.png");
+}
+
+std::optional<std::string> pickMediaFile() {
+    return pickFile(
+        "playback.refactorEditor.screen.mediaFiles"_tr(),
+        L"*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tif;*.tiff;*.mp4;*.mov;*.mkv;*.webm;*.avi;*.m4v"
+    );
+}
+
+std::string screenTargetLabel(std::string const& name, float x, float y, float z) {
+    return "playback.refactorEditor.screen.targetAt"_tr(
+        name,
+        static_cast<int>(std::floor(x)),
+        static_cast<int>(std::floor(y)),
+        static_cast<int>(std::floor(z))
+    );
 }
 
 std::optional<state::editing::model::Vec3> pointInFrontOfCamera(float distance) {

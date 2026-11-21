@@ -27,6 +27,7 @@ private:
     void drawBlurSection(state::editing::model::OverlayItem& item);
     void drawLightSection(state::editing::model::OverlayItem& item);
     void drawStandInSection(PanelContext const& ctx, state::editing::model::OverlayItem& item);
+    void drawScreenSection(state::editing::model::OverlayItem& item);
 
     // A keyable number of the layer: its diamond keys it at the playhead, which is mLocalTick into the layer.
     void keyRow(

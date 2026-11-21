@@ -552,6 +552,16 @@ json toJson(OverlayItem const& item) {
              {"mainHand", item.standIn.mainHand},
              {"offHand", item.standIn.offHand},
          }                                             },
+        {"screen",
+         json{
+             {"target", item.screen.target},
+             {"targetLabel", item.screen.targetLabel},
+             {"file", item.screen.file},
+             {"fit", static_cast<int>(item.screen.fit)},
+             {"sourceOffset", item.screen.sourceOffset},
+             {"loop", item.screen.loop},
+             {"brightness", item.screen.brightness},
+         }                                             },
         {"channels",     toJson(item.channels)         },
     };
 }
@@ -560,7 +570,7 @@ OverlayItem overlayFrom(json const& node) {
     OverlayItem item;
     item.id           = stringOr(node, "id");
     item.name         = stringOr(node, "name");
-    item.kind         = enumOr(node, "kind", item.kind, static_cast<int>(OverlayKind::StandIn));
+    item.kind         = enumOr(node, "kind", item.kind, static_cast<int>(OverlayKind::Screen));
     item.startTick    = std::max(0, intOr(node, "startTick", item.startTick));
     item.endTick      = std::max(item.startTick + 1, intOr(node, "endTick", item.endTick));
     item.fadeInTicks  = std::max(0, intOr(node, "fadeInTicks", 0));
@@ -664,6 +674,16 @@ OverlayItem overlayFrom(json const& node) {
         }
         out.mainHand = stringOr(*standIn, "mainHand");
         out.offHand  = stringOr(*standIn, "offHand");
+    }
+    if (auto const* screen = objectAt(node, "screen")) {
+        auto& out        = item.screen;
+        out.target       = stringOr(*screen, "target");
+        out.targetLabel  = stringOr(*screen, "targetLabel");
+        out.file         = stringOr(*screen, "file");
+        out.fit          = enumOr(*screen, "fit", out.fit, static_cast<int>(ScreenFit::Stretch));
+        out.sourceOffset = std::max(0.0f, finiteOr(*screen, "sourceOffset", 0.0f));
+        out.loop         = boolOr(*screen, "loop", true);
+        out.brightness   = std::clamp(finiteOr(*screen, "brightness", out.brightness), 0.0f, 200.0f);
     }
     item.channels = channelsFrom(node, "channels");
     return item;

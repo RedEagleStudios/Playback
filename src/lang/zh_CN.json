@@ -215,6 +215,35 @@
                 "offHand": "副手",
                 "layerHint": "在时间轴上移动图层会改变它播放的时间；裁剪图层会改变播放录制中的哪一段。"
             },
+            "screen": {
+                "add": "在屏幕上显示照片或视频...",
+                "defaultName": "屏幕 {}",
+                "title": "屏幕",
+                "target": "屏幕",
+                "targetAt": "{}，位于 {}, {}, {}",
+                "noTarget": "选择屏幕",
+                "noScreens": "此处世界中没有家具附加包的电视或显示器。",
+                "targetAbsent": "播放头处该屏幕不在世界中；它出现后就会显示画面。",
+                "file": "照片或视频",
+                "mediaFiles": "照片和视频",
+                "fit": "适配",
+                "fitFill": "填充（裁剪铺满）",
+                "fitFit": "适应（黑边）",
+                "fitStretch": "拉伸",
+                "videoStart": "视频起始于",
+                "videoLength": "视频长度 {}",
+                "loop": "循环播放视频",
+                "brightness": "亮度",
+                "hint": "画面会替换世界中该屏幕自己的画面，因此会受光照、被前方的物体遮挡，并随世界一同导出。视频播放时没有声音。裁剪图层的开头会让视频随边缘移动。",
+                "kinds": {
+                    "mediumStandTv": "中型电视（支架）",
+                    "mediumHangingTv": "中型电视（壁挂）",
+                    "bigStandTv": "大型电视（支架）",
+                    "bigHangingTv": "大型电视（壁挂）",
+                    "monitor": "显示器",
+                    "wideMonitor": "宽屏显示器"
+                }
+            },
             "keyframes": {
                 "previous": "上一个关键帧",
                 "next": "下一个关键帧",
@@ -229,6 +258,7 @@
                 "deleteKey": "删除关键帧"
             },
             "properties": {
+                "screenBrightness": "屏幕亮度",
                 "standInX": "替身 X",
                 "standInY": "替身 Y",
                 "standInZ": "替身 Z",

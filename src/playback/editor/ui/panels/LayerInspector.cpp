@@ -10,6 +10,7 @@
 #include "playback/editor/ui/iconfont.h"
 #include "playback/overlay/OverlayRenderer.h"
 #include "playback/overlay/VanillaAssets.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -141,6 +142,9 @@ bool LayerInspector::draw(PanelContext const& ctx) {
     case OverlayKind::StandIn:
         drawStandInSection(ctx, item);
         break;
+    case OverlayKind::Screen:
+        drawScreenSection(item);
+        break;
     }
     ImGui::EndDisabled();
 
@@ -172,9 +176,12 @@ void LayerInspector::drawLayerSection(OverlayItem& item, int totalTicks) {
     }
     seconds("playback.refactorEditor.layers.end"_tr(), "##layer-end", item.endTick, item.startTick + 1, lastTick);
     int const length = item.endTick - item.startTick;
-    seconds("playback.refactorEditor.layers.fadeIn"_tr(), "##layer-fade-in", item.fadeInTicks, 0, length);
-    seconds("playback.refactorEditor.layers.fadeOut"_tr(), "##layer-fade-out", item.fadeOutTicks, 0, length);
-    keyRow(item, "opacity", ICON_OPACITY, "playback.refactorEditor.layers.opacity"_tr(), "opacity", 0.0f, 100.0f, "%.0f%%", 100.0f);
+    // Stand-ins and screens are drawn by the game in the world: they have no fade or opacity of their own.
+    if (item.kind != OverlayKind::StandIn && item.kind != OverlayKind::Screen) {
+        seconds("playback.refactorEditor.layers.fadeIn"_tr(), "##layer-fade-in", item.fadeInTicks, 0, length);
+        seconds("playback.refactorEditor.layers.fadeOut"_tr(), "##layer-fade-out", item.fadeOutTicks, 0, length);
+        keyRow(item, "opacity", ICON_OPACITY, "playback.refactorEditor.layers.opacity"_tr(), "opacity", 0.0f, 100.0f, "%.0f%%", 100.0f);
+    }
     toggle("##layer-visible", ICON_EYE, "playback.refactorEditor.layers.visible"_tr(), item.visible);
     ImGui::EndDisabled();
     toggle("##layer-locked", ICON_LOCK, "playback.refactorEditor.timeline.lockLayer"_tr(), item.locked);
@@ -430,6 +437,88 @@ void LayerInspector::drawLightSection(OverlayItem& item) {
     }
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", "playback.refactorEditor.layers.lightHint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+    property::endSection();
+}
+
+void LayerInspector::drawScreenSection(OverlayItem& item) {
+    using state::editing::model::ScreenFit;
+    auto& screen = item.screen;
+    if (!property::beginSection((ICON_SCREEN "  " + "playback.refactorEditor.screen.title"_tr()).c_str())) return;
+
+    // Which furniture screen: the add-on's TVs and monitors the replay world has, nearest first.
+    label("playback.refactorEditor.screen.target"_tr());
+    auto const screens = replay::ReplaySession::getInstance().screenTargets();
+    std::string const preview = screen.target.empty() ? "playback.refactorEditor.screen.noTarget"_tr()
+                              : screen.targetLabel.empty() ? screen.target
+                                                           : screen.targetLabel;
+    if (widgets::beginCombo("##screen-target", preview.c_str())) {
+        if (screens.empty()) ImGui::TextDisabled("%s", "playback.refactorEditor.screen.noScreens"_tr().c_str());
+        for (auto const& target : screens) {
+            std::string const text =
+                overlays::screenTargetLabel(target.label, target.position.x, target.position.y, target.position.z);
+            if (ImGui::Selectable((text + "##" + target.id).c_str(), target.id == screen.target)) {
+                screen.target      = target.id;
+                screen.targetLabel = text;
+            }
+        }
+        widgets::endCombo();
+    }
+    if (!screen.target.empty()
+        && std::ranges::none_of(screens, [&](auto const& target) { return target.id == screen.target; })) {
+        ImGui::TextDisabled("%s", "playback.refactorEditor.screen.targetAbsent"_tr().c_str());
+    }
+
+    label("playback.refactorEditor.screen.file"_tr());
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(screen.file.empty() ? "-" : screen.file.c_str());
+    ImGui::PopTextWrapPos();
+    if (property::actionButton((ICON_MEDIA "  " + "playback.refactorEditor.layers.browse"_tr()).c_str())) {
+        if (auto const file = overlays::pickMediaFile()) screen.file = *file;
+    }
+
+    label("playback.refactorEditor.screen.fit"_tr());
+    std::string const fits[] = {
+        "playback.refactorEditor.screen.fitFill"_tr(),
+        "playback.refactorEditor.screen.fitFit"_tr(),
+        "playback.refactorEditor.screen.fitStretch"_tr(),
+    };
+    int fit = static_cast<int>(screen.fit);
+    if (widgets::beginCombo("##screen-fit", fits[std::clamp(fit, 0, 2)].c_str())) {
+        for (int index = 0; index < 3; ++index) {
+            if (ImGui::Selectable(fits[index].c_str(), index == fit)) screen.fit = static_cast<ScreenFit>(index);
+        }
+        widgets::endCombo();
+    }
+
+    // A video's own time at the layer's start; photos ignore it.
+    auto const duration = replay::ReplaySession::getInstance().screenMediaDuration(screen.file);
+    if (duration) {
+        label("playback.refactorEditor.screen.videoStart"_tr());
+        ImGui::SetNextItemWidth(-1.0f);
+        float offset = screen.sourceOffset;
+        if (ImGui::DragFloat("##screen-offset", &offset, 0.05f, 0.0f, static_cast<float>(*duration), "%.2f s")) {
+            screen.sourceOffset = std::clamp(offset, 0.0f, static_cast<float>(*duration));
+        }
+        ImGui::TextDisabled(
+            "%s",
+            "playback.refactorEditor.screen.videoLength"_tr(widgets::formatTick(static_cast<int>(*duration * 20.0)))
+                .c_str()
+        );
+        toggle("##screen-loop", ICON_LOOP, "playback.refactorEditor.screen.loop"_tr(), screen.loop);
+    }
+    keyRow(
+        item,
+        "screen-brightness",
+        ICON_SUN,
+        "playback.refactorEditor.screen.brightness"_tr(),
+        "screenBrightness",
+        0.0f,
+        200.0f,
+        "%.0f%%"
+    );
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.screen.hint"_tr().c_str());
     ImGui::PopTextWrapPos();
     property::endSection();
 }

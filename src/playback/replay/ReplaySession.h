@@ -4,6 +4,7 @@
 #include "playback/keyframe/FollowCamera.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ClientVisualOverrides.h"
+#include "playback/replay/MediaDecoder.h"
 #include "playback/state/editing/models/OverlayItem.h"
 #include "playback/state/editing/models/PoseClip.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
@@ -71,6 +72,22 @@ struct StandInRecording;
 struct StandInRoster;
 struct StandInRuntime;
 struct StandInSource;
+struct ScreenHold;
+struct ScreenRuntime;
+struct ScreenShowing;
+
+// A furniture screen (TV or monitor) the replay world has, or had: what a Screen layer can show its picture on.
+struct ReplayScreenTarget {
+    // The recorded unique id of its entity, as decimal text (ScreenSettings::target).
+    std::string id;
+    // "mediumTv", "bigTv", "monitor" or "wideMonitor".
+    std::string kind;
+    // The kind's name in the game's language ("Big TV (hanging)").
+    std::string label;
+    ::Vec3      position{};
+    // False once it left the loaded world (another dimension, out of range, removed).
+    bool        present{};
+};
 
 using SteadyTimePoint = std::chrono::steady_clock::time_point;
 
@@ -480,6 +497,18 @@ private:
     std::unordered_map<std::string, std::pair<int, int>> mStandInSpans;
     bool                                                  mStandInSpansReady{};
     mutable std::atomic<bool>                             mStandInSpansWanted{false};
+    // Screen layers (setScreens): the editor's layers, then on the client thread what each shows and the screens it
+    // changed; the screens seen, for any thread; the probed media files, for any thread.
+    std::mutex                                      mScreenLayersMutex;
+    std::vector<state::editing::model::OverlayItem> mScreenLayers;
+    bool                                            mScreenLayersChanged{};
+    std::unique_ptr<ScreenRuntime>                  mScreens;
+    mutable std::mutex                              mScreenTargetsMutex;
+    std::vector<ReplayScreenTarget>                 mScreenTargets;
+    int                                             mScreenTargetsAge{};
+    // The instant the export frame being rendered shows.
+    std::optional<visuals::ReplaySampleTime>        mExportScreenTime;
+    mutable MediaProbeCache                         mMediaProbes;
 
 public:
     bool mIsProcessingSnapshot = false;
@@ -686,6 +715,26 @@ private:
     // Stand-ins. updateStandIns runs once per replay tick (advanced, also in a seek's catch-up, where only blocks go in)
     // and once per client tick, where it only acts on what changed: edited layers, a seek's landing, a lost character.
     void updateStandIns(bool advanced);
+    // Screen layers. updateScreens shows the layers active at `tick` (replay ticks, fractional) on their screens: holds
+    // each screen's entity data on a texture slot and replaces that texture with the picture. `exact` (exports) waits
+    // for the picture of that instant. Client thread, every frame.
+    void updateScreens(double tick, bool exact);
+    // Snapshot of the screens the world has, a few times a second.
+    void refreshScreenTargets();
+    // Gives every screen its recorded look and texture back and stops the decoders.
+    void releaseScreens();
+    void releaseScreenHold(int64_t target, ScreenHold const& hold);
+    // Holds the screen on its slot; recorded entity data for a held screen is noted and replaced with the slot's.
+    void holdScreen(ScreenShowing const& showing, Actor& actor);
+    void filterScreenPacket(MinecraftPacketIds packetId, Packet& packet);
+    void sendScreenData(
+        uint64_t                                runtimeId,
+        std::optional<int>                      variant,
+        std::optional<int>                      skin,
+        std::optional<std::pair<uint32_t, bool>> turnedOn
+    );
+    [[nodiscard]] std::shared_ptr<MediaFrame const>
+    screenPicture(ScreenShowing& showing, state::editing::model::OverlayItem const& layer, double tick, bool exact);
     // Despawns what an edit made stale and notes which blocks must go in again; returns the ids of changed layers.
     [[nodiscard]] std::unordered_set<std::string> reconcileStandIns();
     [[nodiscard]] StandInRuntime&                 standInRuntime();
@@ -795,6 +844,16 @@ public:
     // The project's Stand-in layers (the overlays of kind StandIn are kept, the rest ignored). Called every frame; only
     // a change costs more than the comparison. Characters follow on the next tick.
     void setStandIns(std::vector<state::editing::model::OverlayItem> const& layers);
+    // The project's Screen layers (the overlays of kind Screen are kept, the rest ignored). Called every frame; only a
+    // change costs more than the comparison. Any thread.
+    void setScreens(std::vector<state::editing::model::OverlayItem> const& layers);
+    // The furniture screens the replay world has had, present ones first, nearest the camera first. Any thread.
+    [[nodiscard]] std::vector<ReplayScreenTarget> screenTargets() const;
+    // Seconds a video (or animated GIF) file plays; nullopt for an image, an unreadable file, or while it is being read
+    // (the first ask starts that). Any thread, never blocks.
+    [[nodiscard]] std::optional<double> screenMediaDuration(std::string const& file) const;
+    // The instant of the export frame about to render (nullopt once there is none); its Screen pictures go in at once.
+    void setExportScreenTime(std::optional<visuals::ReplaySampleTime> time);
     // Extracts (indexes, caches) the source player's actions, animation/equipment packets and nearby block changes for
     // recorded ticks [fromTick, toTick). False with `error` set (readable sentence) when the replay has no such player or
     // they are absent for the whole range. Runs on the client thread; may take a moment for long replays.

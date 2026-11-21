@@ -107,6 +107,8 @@ ImU32 layerColor(state::editing::model::OverlayKind kind) {
         return theme::kLayerLight;
     case state::editing::model::OverlayKind::StandIn:
         return theme::kLayerStandIn;
+    case state::editing::model::OverlayKind::Screen:
+        return theme::kLayerScreen;
     }
     return theme::kLayerTitle;
 }
@@ -828,6 +830,19 @@ void TimelinePanel::addLayer(
         item.model.file = *file;
         auto const stem = std::filesystem::path(std::u8string(file->begin(), file->end())).stem().u8string();
         if (!stem.empty()) item.name = std::string(stem.begin(), stem.end());
+    } else if (kind == state::editing::model::OverlayKind::Screen) {
+        // A photo or video, shown on the nearest furniture screen until another is chosen in the inspector.
+        auto const file = overlays::pickMediaFile();
+        if (!file) return;
+        item.screen.file = *file;
+        auto const stem = std::filesystem::path(std::u8string(file->begin(), file->end())).stem().u8string();
+        if (!stem.empty()) item.name = std::string(stem.begin(), stem.end());
+        auto const screens = replay::ReplaySession::getInstance().screenTargets();
+        if (!screens.empty()) {
+            auto const& screen      = screens.front();
+            item.screen.target      = screen.id;
+            item.screen.targetLabel = overlays::screenTargetLabel(screen.label, screen.position.x, screen.position.y, screen.position.z);
+        }
     }
     auto layers = project->overlays;
     layers.push_back(item);
@@ -954,6 +969,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 }
             }
             ImGui::EndMenu();
+        }
+        // Photos and videos on the furniture add-on's TVs and monitors in the replay world.
+        if (ImGui::MenuItem((ICON_SCREEN "  " + "playback.refactorEditor.screen.add"_tr()).c_str())) {
+            addLayer(ctx, OverlayKind::Screen);
         }
         widgets::endAnchoredPopup();
     }

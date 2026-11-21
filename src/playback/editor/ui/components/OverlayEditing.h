@@ -54,6 +54,10 @@ void endPreview(PanelContext const& ctx);
 [[nodiscard]] std::optional<std::string> pickModelFile();
 // Asks for a skin image (.png); its UTF-8 path, or none when cancelled.
 [[nodiscard]] std::optional<std::string> pickSkinFile();
+// Asks for a photo or video a Screen layer shows; its UTF-8 path, or none when cancelled.
+[[nodiscard]] std::optional<std::string> pickMediaFile();
+// A furniture screen named with the block it stands at: "Big TV at 12, 64, -30".
+[[nodiscard]] std::string screenTargetLabel(std::string const& name, float x, float y, float z);
 
 // Where the camera looks, `distance` blocks ahead and down to about foot height, for a model placed from the view.
 [[nodiscard]] std::optional<state::editing::model::Vec3> pointInFrontOfCamera(float distance);

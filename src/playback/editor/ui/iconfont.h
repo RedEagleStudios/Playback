@@ -92,6 +92,9 @@ namespace Playback::ReplayEditor::Icons {
 #define ICON_VANILLA_ITEM "\ue5c6" // pickaxe
 #define ICON_STANDIN     "\ue1a4" // users
 #define ICON_HIRE        "\ue1a2" // user-plus
+#define ICON_SCREEN      "\ue195" // tv
+#define ICON_MEDIA       "\ue0f6" // image
+#define ICON_LOOP        "\ue146" // repeat
 #define ICON_MARK_IN     "\ue238" // flag-triangle-right
 #define ICON_MARK_OUT    "\ue237" // flag-triangle-left
 #define ICON_MODEL      "\ue524" // cuboid

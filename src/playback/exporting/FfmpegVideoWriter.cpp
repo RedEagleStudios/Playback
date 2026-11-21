@@ -638,6 +638,8 @@ FfmpegVideoWriter::~FfmpegVideoWriter() = default;
 
 bool FfmpegVideoWriter::isAvailable() { return !ffmpegPath().empty(); }
 
+std::filesystem::path const& FfmpegVideoWriter::executable() { return ffmpegPath(); }
+
 bool FfmpegVideoWriter::open(CompiledExportPlan const& plan) {
     mImpl->requestCancel();
     mImpl->wait();
