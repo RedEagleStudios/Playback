@@ -121,17 +121,31 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
         appendSegment();
         mKeyframeTracks.emplace(camera.id, std::move(segments));
 
-        // Tracks without any shake skip the clock, and applyShake with them.
-        if (std::ranges::none_of(camera.keysByTick, [](auto const& entry) { return entry.second.shake > 0.0f; })) {
-            continue;
+        // Tracks that never shake skip the clock, and applyShake with them.
+        using state::editing::model::CameraProperty::ShakeFrequency;
+        using state::editing::model::CameraProperty::ShakeStrength;
+        auto const strengthKeys = camera.channels.find(ShakeStrength);
+        bool const shakes       = strengthKeys != camera.channels.end() && !strengthKeys->second.empty()
+                                    ? std::ranges::any_of(strengthKeys->second, [](auto const& entry) {
+                                          return entry.second.value > 0.0f;
+                                      })
+                                    : camera.shakeStrength > 0.0f;
+        if (!shakes) continue;
+        // The frequency's own keys, or one key holding its static value.
+        state::editing::model::ValueChannel frequencyKeys;
+        if (auto const keyed = camera.channels.find(ShakeFrequency);
+            keyed != camera.channels.end() && !keyed->second.empty()) {
+            frequencyKeys = keyed->second;
+        } else {
+            frequencyKeys.emplace(0, state::editing::model::ValueKey{camera.shakeFrequency, state::editing::model::KeyEasing::Hold});
         }
         std::vector<ShakeClockKey> clock;
-        clock.reserve(camera.keysByTick.size());
-        for (auto const& [tick, keyframe] : camera.keysByTick) {
+        clock.reserve(frequencyKeys.size());
+        for (auto const& [tick, keyframe] : frequencyKeys) {
             ShakeClockKey key{
                 tick,
-                state::editing::model::sanitizedShakeFrequency(keyframe.shakeFrequency),
-                keyframe.interpolationType == state::editing::model::CameraInterpolationType::Hold,
+                state::editing::model::sanitizedShakeFrequency(keyframe.value),
+                keyframe.easing == state::editing::model::KeyEasing::Hold,
             };
             if (!clock.empty()) {
                 auto const&  previous = clock.back();
@@ -177,7 +191,14 @@ CameraTimelineEvaluator::sampleKeyframes(CameraEntity const& camera, long double
     change->apply(handler);
     auto state = handler.state();
     if (!state) return std::nullopt;
-    applyShake(*state, camera, change->shake, tick);
+    double const time = static_cast<double>(tick);
+    state->fov        = state::editing::model::cameraPropertyAt(camera, state::editing::model::CameraProperty::Fov, time);
+    applyShake(
+        *state,
+        camera,
+        state::editing::model::cameraPropertyAt(camera, state::editing::model::CameraProperty::ShakeStrength, time),
+        tick
+    );
     return state;
 }
 
@@ -206,16 +227,23 @@ void CameraTimelineEvaluator::applyShake(
         cycles            += seconds * seconds / span * (right->frequency - left.frequency) * 0.5;
     }
 
-    auto const settings = camera.shake.sanitized();
-    auto const offset   = [&](uint32_t channel, float amount) {
-        return strength * amount * shakeNoise(settings.seed, channel, cycles);
+    // The amounts are the track's properties too, so a shake can grow or settle over time.
+    using state::editing::model::cameraPropertyAt;
+    namespace Property      = state::editing::model::CameraProperty;
+    double const time       = static_cast<double>(tick);
+    float const  position   = std::max(0.0f, cameraPropertyAt(camera, Property::ShakePosition, time));
+    float const  rotation   = std::max(0.0f, cameraPropertyAt(camera, Property::ShakeRotation, time));
+    float const  rollAmount = std::max(0.0f, cameraPropertyAt(camera, Property::ShakeRoll, time));
+    uint32_t const seed     = camera.shake.seed;
+    auto const offset       = [&](uint32_t channel, float amount) {
+        return strength * amount * shakeNoise(seed, channel, cycles);
     };
-    state.x     += offset(0, settings.positionAmount);
-    state.y     += offset(1, settings.positionAmount);
-    state.z     += offset(2, settings.positionAmount);
-    state.yaw   += offset(3, settings.rotationAmount);
-    state.pitch += offset(4, settings.rotationAmount);
-    state.roll  += offset(5, settings.rollAmount);
+    state.x     += offset(0, position);
+    state.y     += offset(1, position);
+    state.z     += offset(2, position);
+    state.yaw   += offset(3, rotation);
+    state.pitch += offset(4, rotation);
+    state.roll  += offset(5, rollAmount);
 }
 
 std::optional<CameraTimelineEvaluation>

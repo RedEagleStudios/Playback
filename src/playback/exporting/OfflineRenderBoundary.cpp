@@ -683,17 +683,20 @@ std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(Expor
     long double const current = replayTime->value();
     if (current < 0.0L || current > static_cast<long double>(mMaximumReplayTick)) return std::nullopt;
 
+    // The game's clock runs on the output's time, so jumping over a cut in the replay is not a huge time step.
+    long double const timeline =
+        static_cast<long double>(frame.timelineTickNumerator) / static_cast<long double>(frame.replayTickDenominator);
     long double delta             = 0.0L;
-    int64_t     previousWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
+    int64_t     previousWholeTick = frame.timelineTickNumerator / frame.replayTickDenominator;
     if (mLastSubmittedFrame) {
-        delta = current
-              - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
+        delta = timeline
+              - static_cast<long double>(mLastSubmittedFrame->timelineTickNumerator)
                     / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
-        previousWholeTick = mLastSubmittedFrame->replayTickNumerator / mLastSubmittedFrame->replayTickDenominator;
+        previousWholeTick = mLastSubmittedFrame->timelineTickNumerator / mLastSubmittedFrame->replayTickDenominator;
     }
     if (delta < 0.0L || delta > static_cast<long double>(std::numeric_limits<float>::max())) return std::nullopt;
 
-    int64_t const currentWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
+    int64_t const currentWholeTick = frame.timelineTickNumerator / frame.replayTickDenominator;
     int64_t const wholeTicks       = currentWholeTick - previousWholeTick;
     if (wholeTicks < 0 || wholeTicks > std::numeric_limits<int>::max()) return std::nullopt;
 

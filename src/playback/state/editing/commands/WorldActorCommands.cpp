@@ -1,5 +1,8 @@
 ﻿#include "WorldActorCommands.h"
 
+#include <algorithm>
+#include <vector>
+
 #include "playback/state/editing/WorldActorOps.h"
 
 #include <utility>
@@ -45,18 +48,43 @@ void        TrimWorldActorSegment::undo(model::EditorStateExt& state) { restore(
 std::string TrimWorldActorSegment::label() const { return "Trim World Actor"; }
 
 
-RippleDeleteWorldActorSeg::RippleDeleteWorldActorSeg(std::string id) : mId(std::move(id)) {}
+DeleteWorldActorSegment::DeleteWorldActorSegment(std::string id) : mId(std::move(id)) {}
 
-void RippleDeleteWorldActorSeg::execute(model::EditorStateExt& state) {
+void DeleteWorldActorSegment::execute(model::EditorStateExt& state) {
     auto before = state;
-    if (!WorldActorOps::rippleDelete(state.worldActor, mId, state.totalTicks)) {
+    if (!WorldActorOps::deleteSegment(state.worldActor, mId)) {
         mBefore.reset();
         return;
     }
     mBefore = std::move(before);
 }
 
-void        RippleDeleteWorldActorSeg::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string RippleDeleteWorldActorSeg::label() const { return "Ripple Delete World Actor"; }
+void        DeleteWorldActorSegment::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string DeleteWorldActorSegment::label() const { return "Cut Replay Segment"; }
+
+SetWorldActorLocked::SetWorldActorLocked(bool locked) : mLocked(locked) {}
+
+void SetWorldActorLocked::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto& segments = state.worldActor.segments;
+    if (std::ranges::all_of(segments, [this](auto const& segment) { return segment.locked == mLocked; })) return;
+    std::vector<bool> before;
+    before.reserve(segments.size());
+    for (auto& segment : segments) {
+        before.push_back(segment.locked);
+        segment.locked = mLocked;
+    }
+    mBefore = std::move(before);
+}
+
+void SetWorldActorLocked::undo(model::EditorStateExt& state) {
+    if (!mBefore) return;
+    auto& segments = state.worldActor.segments;
+    for (size_t index = 0; index < segments.size() && index < mBefore->size(); ++index) {
+        segments[index].locked = (*mBefore)[index];
+    }
+}
+
+std::string SetWorldActorLocked::label() const { return mLocked ? "Lock Replay Layer" : "Unlock Replay Layer"; }
 
 } // namespace playback::state::editing::command

@@ -53,7 +53,6 @@ model::CameraKeyframe keyOf(CameraRenderState const& view) {
     key.yaw               = view.yaw;
     key.pitch             = view.pitch;
     key.roll              = view.roll;
-    key.fov               = view.fov;
     key.interpolationType = CameraInterpolationType::Linear;
     return key;
 }
@@ -85,14 +84,15 @@ void addSimplifiedKeys(
 
 } // namespace
 
-std::vector<std::map<int, model::CameraKeyframe>> recordedCameraTracks(std::span<RecordedCameraView const> views) {
-    std::vector<std::map<int, model::CameraKeyframe>> tracks;
-    std::size_t                                       runStart = 0;
+std::vector<RecordedCameraTrack> recordedCameraTracks(std::span<RecordedCameraView const> views) {
+    std::vector<RecordedCameraTrack> tracks;
+    std::size_t                      runStart = 0;
     for (std::size_t next = 1; next <= views.size(); ++next) {
         if (next < views.size() && views[next].tick == views[next - 1].tick + 1) continue;
 
         // [runStart, next) is one unbroken run of ticks: one track, split into stretches at its cuts.
-        auto&       keys         = tracks.emplace_back();
+        auto&       track        = tracks.emplace_back();
+        auto&       keys         = track.keys;
         std::size_t stretchStart = runStart;
         for (std::size_t index = runStart; index < next; ++index) {
             bool const lastInRun = index + 1 == next;
@@ -101,6 +101,14 @@ std::vector<std::map<int, model::CameraKeyframe>> recordedCameraTracks(std::span
             addSimplifiedKeys(views, stretchStart, index, keys);
             if (cutAfter) keys[views[index].tick].interpolationType = CameraInterpolationType::Hold;
             stretchStart = index + 1;
+        }
+        // The FOV is its own property: keyed at the Transform keys' ticks, or one static value when it never changes.
+        int const firstTick = views[runStart].tick;
+        for (auto const& [tick, key] : keys) {
+            float const fov = views[runStart + static_cast<std::size_t>(tick - firstTick)].view.fov;
+            auto const  easing =
+                key.interpolationType == CameraInterpolationType::Hold ? model::KeyEasing::Hold : model::KeyEasing::Linear;
+            track.fov.emplace(tick, model::ValueKey{fov, easing});
         }
         runStart = next;
     }

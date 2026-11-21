@@ -36,9 +36,9 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class RippleDeleteWorldActorSeg final : public model::IEditCommand {
+class DeleteWorldActorSegment final : public model::IEditCommand {
 public:
-    explicit RippleDeleteWorldActorSeg(std::string id);
+    explicit DeleteWorldActorSegment(std::string id);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -47,6 +47,20 @@ public:
 private:
     std::string                          mId;
     std::optional<model::EditorStateExt> mBefore;
+};
+
+// Locks or unlocks every segment of the replay layer, so it can be neither cut nor trimmed.
+class SetWorldActorLocked final : public model::IEditCommand {
+public:
+    explicit SetWorldActorLocked(bool locked);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    bool                                 mLocked;
+    std::optional<std::vector<bool>>     mBefore;
 };
 
 } // namespace playback::state::editing::command

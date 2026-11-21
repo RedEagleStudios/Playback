@@ -8,6 +8,7 @@
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorContext.h"
 #include "playback/state/EditorState.h"
+#include "playback/state/editing/ProjectSerializer.h"
 
 #include "magic_enum/magic_enum.hpp"
 #include "nlohmann/json.hpp"
@@ -38,6 +39,8 @@ json toJson(model::GlobalPack const& pack) {
     };
 }
 
+json toJson(model::ValueChannels const& channels);
+
 json toJson(model::WorldSettings const& world) {
     auto packs = json::array();
     for (auto const& pack : world.globalPacks) packs.push_back(toJson(pack));
@@ -64,6 +67,7 @@ json toJson(model::WorldSettings const& world) {
         {"exposure",            world.exposure                       },
         {"temperature",         world.temperature                    },
         {"tint",                world.tint                           },
+        {"channels",            toJson(world.channels)               },
     };
 }
 
@@ -79,6 +83,45 @@ json toJson(model::FollowSettings const& follow) {
         {"hasTripod",  follow.hasTripod                                                },
         {"smoothing",  follow.smoothing                                                },
     };
+}
+
+json toJson(model::ValueChannels const& channels) {
+    json result = json::object();
+    for (auto const& [name, channel] : channels) {
+        auto keys = json::array();
+        for (auto const& [tick, key] : channel) {
+            keys.push_back({
+                {"tick",   tick                           },
+                {"value",  key.value                      },
+                {"easing", magic_enum::enum_name(key.easing)},
+            });
+        }
+        result[name] = std::move(keys);
+    }
+    return result;
+}
+
+// {"<property>": [{"tick", "value", "easing"}]}; easing is a name or its number (as layers list it), EaseInOut when
+// unknown.
+model::ValueChannels channelsFrom(json const& node) {
+    model::ValueChannels channels;
+    if (!node.is_object()) return channels;
+    for (auto const& [name, keys] : node.items()) {
+        if (!keys.is_array()) continue;
+        for (auto const& key : keys) {
+            if (!key.is_object()) continue;
+            std::optional<model::KeyEasing> easing;
+            if (auto const field = key.find("easing"); field != key.end()) {
+                if (field->is_string()) easing = magic_enum::enum_cast<model::KeyEasing>(field->get<std::string>());
+                else if (field->is_number_integer()) easing = magic_enum::enum_cast<model::KeyEasing>(field->get<int>());
+            }
+            channels[name].insert_or_assign(
+                key.value("tick", 0),
+                model::ValueKey{key.value("value", 0.0f), easing.value_or(model::KeyEasing::EaseInOut)}
+            );
+        }
+    }
+    return channels;
 }
 
 json toJson(model::ShakeSettings const& shake) {
@@ -138,9 +181,6 @@ json stateJson(EditorState const& state) {
                     {"interpolation", magic_enum::enum_name(key.interpolationType)                 },
                     {"position",      json::array({key.position.x, key.position.y, key.position.z})},
                     {"rotation",      json::array({key.yaw, key.pitch, key.roll})                  },
-                    {"fov",           key.fov                                                      },
-                    {"shake",         key.shake                                                    },
-                    {"shakeFrequency", key.shakeFrequency                                          },
                     {"bezier",
                      json::array(
                          {json::array({key.bezierCtrl1.x, key.bezierCtrl1.y}),
@@ -158,7 +198,13 @@ json stateJson(EditorState const& state) {
                 {"keys",    std::move(keys)                   },
             };
             if (camera.kind == model::CameraTrackKind::ThirdPerson) entry["follow"] = toJson(camera.follow);
-            if (camera.kind == model::CameraTrackKind::Keyframe) entry["shake"] = toJson(camera.shake);
+            if (camera.kind == model::CameraTrackKind::Keyframe) {
+                entry["shake"]          = toJson(camera.shake);
+                entry["fov"]            = camera.fov;
+                entry["shakeStrength"]  = camera.shakeStrength;
+                entry["shakeFrequency"] = camera.shakeFrequency;
+                entry["channels"]       = toJson(camera.channels);
+            }
             cameras.push_back(std::move(entry));
         }
         auto markers = json::array();
@@ -180,11 +226,22 @@ json stateJson(EditorState const& state) {
                 {"hideItems",    key.hideItems   },
             });
         }
+        auto segments = json::array();
+        for (auto const& segment : project->worldActor.segments) {
+            segments.push_back({
+                {"id",        segment.id       },
+                {"startTick", segment.startTick},
+                {"endTick",   segment.endTick  },
+                {"locked",    segment.locked   },
+            });
+        }
         result["project"] = {
-            {"cameras", std::move(cameras)    },
-            {"markers", std::move(markers)    },
-            {"poseKeys", std::move(poseKeys)   },
-            {"world",   toJson(project->world)},
+            {"cameras",  std::move(cameras)                                             },
+            {"markers",  std::move(markers)                                             },
+            {"poseKeys", std::move(poseKeys)                                            },
+            {"overlays", json::parse(playback::state::editing::serializeOverlays(project->overlays))},
+            {"segments", std::move(segments)                                            },
+            {"world",    toJson(project->world)                                         },
         };
     }
 
@@ -273,6 +330,7 @@ model::WorldSettings worldFrom(json const& node, model::WorldSettings world) {
     world.exposure      = node.value("exposure", world.exposure);
     world.temperature   = node.value("temperature", world.temperature);
     world.tint          = node.value("tint", world.tint);
+    if (auto const channels = node.find("channels"); channels != node.end()) world.channels = channelsFrom(*channels);
     return world.sanitized();
 }
 
@@ -334,6 +392,7 @@ exporting::ExportSettings exportFrom(json const& node) {
     settings.motionBlurShutter = node.value("motionBlurShutter", settings.motionBlurShutter);
     settings.audio             = node.value("audio", settings.audio);
     settings.hideHud           = node.value("hideHud", settings.hideHud);
+    settings.stillFrame        = node.value("stillFrame", settings.stillFrame);
     return settings;
 }
 
@@ -389,6 +448,13 @@ std::optional<EditorAction> actionFrom(json const& body, EditorState const& stat
             poseKeys.push_back(std::move(key));
         }
     }
+    if (auto const overlays = body.find("overlays"); overlays != body.end() && overlays->is_array()) {
+        auto& items = action.overlays.emplace();
+        if (!playback::state::editing::deserializeOverlays(overlays->dump(), items)) {
+            error = "overlays must be an array of layer objects";
+            return std::nullopt;
+        }
+    }
     if (auto const follow = body.find("followSettings"); follow != body.end()) {
         model::FollowSettings current;
         if (state.project) {
@@ -397,16 +463,23 @@ std::optional<EditorAction> actionFrom(json const& body, EditorState const& stat
         }
         action.followSettings = followFrom(*follow, current);
     }
-    if (auto const shake = body.find("shakeSettings"); shake != body.end()) {
-        model::ShakeSettings current;
+    // SetCameraProperties: fields left out keep the camera's own; `channels` replaces its keys when given.
+    if (auto const properties = body.find("cameraProperties"); properties != body.end() && properties->is_object()) {
+        model::CameraProperties current;
         if (state.project) {
             auto const camera = std::ranges::find(state.project->cameras, action.id, &model::CameraEntity::id);
-            if (camera != state.project->cameras.end()) current = camera->shake;
+            if (camera != state.project->cameras.end()) current = model::cameraProperties(*camera);
         }
-        action.shakeSettings = shakeFrom(*shake, current);
-    }
-    if (auto const frequency = body.find("shakeFrequency"); frequency != body.end()) {
-        action.shakeFrequency = frequency->get<float>();
+        current.fov            = properties->value("fov", current.fov);
+        current.shakeStrength  = properties->value("shakeStrength", current.shakeStrength);
+        current.shakeFrequency = properties->value("shakeFrequency", current.shakeFrequency);
+        if (auto const shake = properties->find("shake"); shake != properties->end()) {
+            current.shake = shakeFrom(*shake, current.shake);
+        }
+        if (auto const channels = properties->find("channels"); channels != properties->end()) {
+            current.channels = channelsFrom(*channels);
+        }
+        action.cameraProperties = std::move(current);
     }
     if (auto const bezier = body.find("bezierControls");
         bezier != body.end() && bezier->is_array() && bezier->size() == 2) {

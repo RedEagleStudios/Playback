@@ -12,6 +12,7 @@
 #include "playback/state/editing/CameraBindingOps.h"
 #include "playback/state/editing/ProjectStore.h"
 #include "playback/state/editing/RecordedCameraTracks.h"
+#include "playback/state/editing/WorldActorOps.h"
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/CommandFactory.h"
 #include "playback/visuals/FrameTap.h"
@@ -83,11 +84,18 @@ void EditorController::publishCameraTimeline() {
         return;
     }
     auto dimensionTransitionTicks = replay::ReplaySession::getInstance().getDimensionTransitionTicks();
+    // A camera property being dragged is shown live without becoming an undo step.
+    auto project = mProject;
+    if (mCameraPreview) {
+        auto const camera =
+            std::ranges::find(project.cameras, mCameraPreview->first, &state::editing::model::CameraEntity::id);
+        if (camera != project.cameras.end()) state::editing::model::setCameraProperties(*camera, mCameraPreview->second);
+    }
     // No subject sampler: the replay session follows a person track's subject natively, like the user's follow.
     keyframe::publishCameraTimeline(
         keyframe::CameraTimelineSource::Preview,
         std::make_shared<keyframe::CameraTimelineEvaluator>(
-            mProject,
+            std::move(project),
             mPreviewCameraId,
             false,
             std::move(dimensionTransitionTicks)
@@ -104,7 +112,6 @@ std::optional<state::editing::model::CameraKeyframe> EditorController::captureCa
     key.yaw      = state.yaw;
     key.pitch    = state.pitch;
     key.roll     = state.roll;
-    key.fov      = state.fov;
     return key;
 }
 
@@ -185,14 +192,24 @@ void EditorController::addRecordedCameraTracks() {
     views.reserve(samples.size());
     for (auto const& sample : samples) views.push_back({sample.tickOffset, sample.view});
     int number = 0;
-    for (auto& keys : state::editing::recordedCameraTracks(views)) {
+    for (auto& track : state::editing::recordedCameraTracks(views)) {
         auto const id = state::editing::CameraBindingOps::addFreeCamera(
             mProject,
             "playback.refactorEditor.defaults.recordedCamera"_tr(++number),
             state::editing::model::CameraTrackKind::Keyframe
         );
         auto const camera = std::ranges::find(mProject.cameras, id, &state::editing::model::CameraEntity::id);
-        if (camera != mProject.cameras.end()) camera->keysByTick = std::move(keys);
+        if (camera == mProject.cameras.end()) continue;
+        camera->keysByTick = std::move(track.keys);
+        // A FOV that never changes is the track's static value; one that changes keeps its keys.
+        if (!track.fov.empty()) {
+            float const first = track.fov.begin()->second.value;
+            if (std::ranges::all_of(track.fov, [first](auto const& entry) { return entry.second.value == first; })) {
+                camera->fov = first;
+            } else {
+                camera->channels[state::editing::model::CameraProperty::Fov] = std::move(track.fov);
+            }
+        }
     }
     mProject.recordedCameraTracksAdded = true;
     logger().info("Added {} recorded camera track(s) from {} views", number, samples.size());
@@ -284,8 +301,11 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::TrimWorldActor:
         mCommandStack.push(CommandFactory::createTrimWorldActor(action.id, action.tick, action.kind), mProject);
         break;
-    case EditorActionType::RippleDeleteWorldActorSegment:
-        mCommandStack.push(CommandFactory::createRippleDeleteWorldActorSegment(action.id), mProject);
+    case EditorActionType::DeleteWorldActorSegment:
+        mCommandStack.push(CommandFactory::createDeleteWorldActorSegment(action.id), mProject);
+        break;
+    case EditorActionType::SetWorldActorLocked:
+        mCommandStack.push(CommandFactory::createSetWorldActorLocked(action.value), mProject);
         break;
     case EditorActionType::AddCameraKeyframe:
         if (action.keyframe) {
@@ -299,15 +319,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             logger().debug("Captured camera keyframe (camera={}, tick={})", action.id, action.tick);
             // A person track's first key views whoever the user follows; later keys keep the previous subject.
             captured->subject = replay::ReplaySession::getInstance().userReplaySubjectChoice();
-            // The live camera carries no shake, so a new key keeps the shake of the key before it.
-            auto const& cameras = mProject.cameras;
-            auto const  camera  = std::ranges::find(cameras, action.id, &state::editing::model::CameraEntity::id);
-            if (camera != cameras.end()) {
-                if (auto const next = camera->keysByTick.lower_bound(action.tick); next != camera->keysByTick.begin()) {
-                    captured->shake          = std::prev(next)->second.shake;
-                    captured->shakeFrequency = std::prev(next)->second.shakeFrequency;
-                }
-            }
             mCommandStack.push(
                 CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)),
                 mProject
@@ -367,9 +378,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mProject
         );
         break;
-    case EditorActionType::SetKeyframeFov:
-        mCommandStack.push(CommandFactory::createSetCameraKeyframeFov(action.id, action.tick, action.speed), mProject);
-        break;
     case EditorActionType::SetKeyframeSubject:
         mCommandStack.push(
             CommandFactory::createSetCameraKeyframeSubject(action.id, action.tick, action.secondaryId),
@@ -387,16 +395,15 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mCommandStack.push(CommandFactory::createSetCameraFollow(action.id, *action.followSettings), mProject);
         }
         break;
-    case EditorActionType::SetKeyframeShake:
-        mCommandStack.push(
-            CommandFactory::createSetCameraKeyframeShake(action.id, action.tick, action.speed, action.shakeFrequency),
-            mProject
-        );
-        break;
-    case EditorActionType::SetCameraShake:
-        if (action.shakeSettings) {
-            mCommandStack.push(CommandFactory::createSetCameraShake(action.id, *action.shakeSettings), mProject);
+    case EditorActionType::SetCameraProperties:
+        mCameraPreview.reset();
+        if (action.cameraProperties) {
+            mCommandStack.push(CommandFactory::createSetCameraProperties(action.id, *action.cameraProperties), mProject);
         }
+        break;
+    case EditorActionType::PreviewCameraProperties:
+        mCameraPreview.reset();
+        if (action.cameraProperties) mCameraPreview = std::pair{action.id, *action.cameraProperties};
         break;
     case EditorActionType::RenameCamera:
         mCommandStack.push(CommandFactory::createRenameCamera(action.id, action.name), mProject);
@@ -459,6 +466,13 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SetPoseKeys:
         if (action.poseKeys) mCommandStack.push(CommandFactory::createSetPoseKeys(*action.poseKeys), mProject);
         break;
+    case EditorActionType::SetOverlays:
+        mOverlayPreview.reset();
+        if (action.overlays) mCommandStack.push(CommandFactory::createSetOverlays(*action.overlays), mProject);
+        break;
+    case EditorActionType::PreviewOverlays:
+        mOverlayPreview = action.overlays;
+        break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
@@ -490,7 +504,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
                 pose.yaw,
                 pose.pitch,
                 pose.roll,
-                pose.fov,
+                state::editing::model::cameraPropertyAt(*camera, state::editing::model::CameraProperty::Fov, action.tick),
             }
         );
         break;
@@ -547,6 +561,7 @@ void EditorController::publishState(bool hudVisible) {
         flushProjectOnClose();
         mActiveReplayPath.clear();
         mWorldPreview.reset();
+        mOverlayPreview.reset();
         editor::graphics::setFogOverride(std::nullopt);
         editor::graphics::setFovOverride(std::nullopt);
         editor::graphics::setColorGrading(std::nullopt);
@@ -557,7 +572,9 @@ void EditorController::publishState(bool hudVisible) {
     mProject.playing                 = !state.paused;
     mProject.playbackSpeed           = state.playbackSpeed;
     if (sessionActive) {
-        auto const& world = mWorldPreview ? *mWorldPreview : mProject.world;
+        // Keyed world values take their value at the playhead, in preview and export alike.
+        auto const world =
+            state::editing::model::worldAt(mWorldPreview ? *mWorldPreview : mProject.world, state.currentTick);
         session.setWorldOverrides(
             world.overrideTime ? std::optional<int>{world.timeOfDay} : std::nullopt,
             world.freezeTime,
@@ -578,7 +595,12 @@ void EditorController::publishState(bool hudVisible) {
         session.setPoseClips(state::editing::model::poseClipsFrom(mProject.poseKeys, mProject.totalTicks));
         state.installedGlobalPacks = session.installedGlobalPacks();
     }
-    state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
+    state.project = std::make_shared<state::editing::model::EditorStateExt>(mProject);
+    if (mOverlayPreview) {
+        auto preview      = std::make_shared<state::editing::model::EditorStateExt>(mProject);
+        preview->overlays = *mOverlayPreview;
+        state.project     = std::move(preview);
+    }
     state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
     if (state.cameraTimeline) {
         if (auto const shot = state.cameraTimeline->shotAt(state.currentTick)) state.activeCameraId = shot.camera->id;
@@ -822,10 +844,40 @@ void EditorController::tick(bool hudVisible) {
         }
     }
 
+    skipCutReplayGaps();
     if (mExportDriver && !mExportTickedBeforeClientUpdate) mExportDriver->tick();
     mExportTickedBeforeClientUpdate = false;
     autosaveIfDue();
     publishState(hudVisible);
+}
+
+// Cut stretches of the replay layer do not play: reaching a gap jumps to the next segment, and past the last one the
+// replay pauses. A paused playhead may still sit in a gap, so the user can see what was cut. A seek pauses the
+// replay, so playback resumes once the jump has landed.
+void EditorController::skipCutReplayGaps() {
+    auto& session = replay::ReplaySession::getInstance();
+    if (!session.isActive() || (mExportDriver && mExportDriver->isActive())) {
+        mResumeAfterCutJump = false;
+        return;
+    }
+    if (session.isSeekPending()) return;
+    if (mResumeAfterCutJump) {
+        mResumeAfterCutJump = false;
+        if (session.isPaused()) (void)session.setPaused(false);
+        return;
+    }
+    if (session.isPaused()) return;
+    int const tick = session.getCurrentTick();
+    if (tick < 0 || tick >= mProject.totalTicks) return;
+    auto const next = state::editing::WorldActorOps::nextPlayableTick(mProject.worldActor, tick);
+    if (!next) {
+        (void)session.setPaused(true);
+        return;
+    }
+    if (*next > tick) {
+        session.requestSeek(*next);
+        mResumeAfterCutJump = true;
+    }
 }
 
 } // namespace playback::state

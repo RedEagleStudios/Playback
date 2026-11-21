@@ -3,6 +3,7 @@
 #include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/IEditCommand.h"
 #include "playback/state/editing/models/PoseClip.h"
+#include "playback/state/editing/models/OverlayItem.h"
 #include "playback/state/editing/models/SubActor.h"
 #include "playback/state/editing/models/WorldSettings.h"
 
@@ -19,7 +20,8 @@ public:
     static std::unique_ptr<model::IEditCommand> createSplitWorldActor(int tick);
     static std::unique_ptr<model::IEditCommand> createTrimWorldActor(const std::string& id, int start, int end);
 
-    static std::unique_ptr<model::IEditCommand> createRippleDeleteWorldActorSegment(const std::string& id);
+    static std::unique_ptr<model::IEditCommand> createDeleteWorldActorSegment(const std::string& id);
+    static std::unique_ptr<model::IEditCommand> createSetWorldActorLocked(bool locked);
     static std::unique_ptr<model::IEditCommand>
     createAddFreeCamera(const std::string& name, model::CameraTrackKind kind);
     static std::unique_ptr<model::IEditCommand> createDeleteCamera(const std::string& id);
@@ -44,9 +46,6 @@ public:
     createSetCameraKeyframePosition(const std::string& id, int tick, model::Vec3 position);
     static std::unique_ptr<model::IEditCommand>
     createSetCameraKeyframeRotation(const std::string& id, int tick, model::Vec3 rotation);
-    static std::unique_ptr<model::IEditCommand> createSetCameraKeyframeFov(const std::string& id, int tick, float fov);
-    static std::unique_ptr<model::IEditCommand>
-    createSetCameraKeyframeShake(const std::string& id, int tick, float shake, std::optional<float> frequency);
     static std::unique_ptr<model::IEditCommand>
     createSetCameraKeyframeSubject(const std::string& id, int tick, const std::string& subject);
     static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
@@ -54,7 +53,7 @@ public:
     static std::unique_ptr<model::IEditCommand>
     createSetCameraFollow(const std::string& id, model::FollowSettings const& follow);
     static std::unique_ptr<model::IEditCommand>
-    createSetCameraShake(const std::string& id, model::ShakeSettings const& shake);
+    createSetCameraProperties(const std::string& id, model::CameraProperties properties);
     static std::unique_ptr<model::IEditCommand> createRenameCamera(const std::string& id, const std::string& name);
     static std::unique_ptr<model::IEditCommand> createClearCameraKeyframes(const std::string& id);
     static std::unique_ptr<model::IEditCommand>
@@ -77,6 +76,7 @@ public:
 
     static std::unique_ptr<model::IEditCommand> createSetWorldSettings(model::WorldSettings const& settings);
     static std::unique_ptr<model::IEditCommand> createSetPoseKeys(std::vector<model::PoseKey> keys);
+    static std::unique_ptr<model::IEditCommand> createSetOverlays(std::vector<model::OverlayItem> overlays);
 };
 
 } // namespace playback::state::editing::command

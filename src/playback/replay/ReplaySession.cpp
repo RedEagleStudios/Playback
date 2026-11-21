@@ -99,6 +99,7 @@
 #include "mc/network/packet/RemoveObjectivePacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
+#include "mc/network/packet/SetActorLinkPacket.h"
 #include "mc/network/packet/SetDisplayObjectivePacket.h"
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/StartGamePacket.h"
@@ -207,6 +208,7 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <random>
 #include <stdexcept>
@@ -269,6 +271,18 @@ namespace {
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
+// The client refuses a rider an add-on vehicle has no seat for, and the replay world loads no behavior packs, so a
+// recorded bicycle or car had none: its rider walked beside it. The recording says the rider sat there, so it does.
+void forceRecordedRide(Level& level, ActorLink const& link) {
+    if (link.type != ActorLinkType::Riding && link.type != ActorLinkType::Passenger) return;
+    auto* vehicle = level.fetchEntity(link.A, false);
+    auto* rider   = level.fetchEntity(link.B, false);
+    if (!vehicle || !rider || rider->isRiding(vehicle)) return;
+    if (!rider->startRiding(*vehicle, true)) {
+        getLogger().debug("Unable to seat {} on recorded vehicle {}", rider->getTypeName(), vehicle->getTypeName());
+    }
+}
+
 // The game's initializer reaches into components the replay world may not back, and faults on some servers' add-on
 // blocks (crops and trees have). Such a block is skipped instead of taking the game down; it may look wrong in the
 // replay. No C++ objects live in here: __try cannot unwind them.
@@ -280,6 +294,20 @@ bool initializeRecordedBlock(::BlockDefinitionGroup& definitions, ::BlockDefinit
     }
     return true;
 }
+
+// Base shape descriptions taken out of a definition while the game initializes it, to be put back after.
+struct HeldBackShapes {
+    BlockComponentGroupDescription*                         group;
+    std::vector<std::shared_ptr<BlockComponentDescription>> descriptions;
+};
+
+// Puts each recorded add-on block's shape (geometry, placement-direction turn, light) on its permutations, as their
+// states select it, before the game initializes the block: initialization bakes the shape into the permutation's render
+// schematic and put the base shape on every permutation, so a chain lamp drew as a whole lamp and a south-placed
+// switch faced north. The base shape descriptions are held back from initialization and returned.
+std::vector<HeldBackShapes>
+shapeRecordedPermutations(BlockDefinitionGroup& definitions, std::vector<ServerBlockProperty> const& properties);
+void restoreHeldBackShapes(std::vector<HeldBackShapes>& held);
 
 // LeviLamina's registerDataDrivenBlock registers the type without the states and traits its description declares, so
 // createBlockPermutations made a single permutation: every recorded state of an add-on block (a colour, a facing, a
@@ -1108,6 +1136,7 @@ void ReplaySession::clearReplayData() {
     mDeferredControllerPackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
+    mRiderSeats.clear();
     mRecordedLocalPlayerId.reset();
     gReplayHandBobTick.clear();
     gReplayHotbars.clear();
@@ -3330,6 +3359,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mDeferredControllerPackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
+    mRiderSeats.clear();
     mRecordedLocalPlayerId.reset();
     gReplayHandBobTick.clear();
     gReplayHotbars.clear();
@@ -3597,6 +3627,8 @@ void ReplaySession::applyRecordedBlockRegistry() {
             recorded.emplace_back(*name, definition);
         }
 
+        auto heldBackShapes = shapeRecordedPermutations(*definitions, properties);
+
         // One at a time rather than BlockDefinitionGroup::initializeBlocks, which runs every definition unchecked
         // and lets one faulting add-on block crash the replay.
         std::string skipped;
@@ -3607,6 +3639,7 @@ void ReplaySession::applyRecordedBlockRegistry() {
             skipped += name;
             ++skippedCount;
         }
+        restoreHeldBackShapes(heldBackShapes);
         if (skippedCount != 0) {
             getLogger()
                 .warn("Skipped {} recorded custom block(s) the game could not initialize: {}", skippedCount, skipped);
@@ -3633,11 +3666,30 @@ void ReplaySession::applyRecordedBlockRegistry() {
             }
         }
 
+        // The replay world is a local game: block packets reach the client's own level, whose palette was built when
+        // the world opened and lacked every recorded add-on block. A block the recording changed (a switch flipped, a
+        // lamp it turned on) arrives by network ID, resolved to air there, and vanished.
+        size_t clientAppended = 0;
+        if (auto clientLevel = ll::service::getMultiPlayerLevel(); clientLevel && &*clientLevel != &*level) {
+            auto& clientPalette = clientLevel->getBlockPalette();
+            for (auto const& [name, tag] : properties) {
+                auto blockType = registry.lookupByName(HashedString{name}, false);
+                if (!blockType) continue;
+                for (auto const& permutation : *blockType->mBlockPermutations) {
+                    if (!permutation || &clientPalette.getBlock(permutation->mNetworkId) == permutation.get()) continue;
+                    clientPalette.appendBlock(*permutation);
+                    ++clientAppended;
+                }
+            }
+            clientPalette.cacheBlockComponentData();
+        }
+
         getLogger().debug(
-            "Registered {} recorded custom block types (geometry={}, visuals={})",
+            "Registered {} recorded custom block types (geometry={}, visuals={}, client palette={})",
             registered,
             preloadedGeometry,
-            injectedVisuals
+            injectedVisuals,
+            clientAppended
         );
     } catch (std::exception const& exception) {
         getLogger().error("Unable to register recorded custom blocks: {}", exception.what());
@@ -3694,17 +3746,30 @@ size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<ServerBlockProper
 
 namespace {
 
-struct PermutationVisual {
-    std::string                      condition;
-    BlockComponentDescription const* geometry = nullptr;
-    BlockComponentDescription const* material = nullptr;
+// The parts of a permutation that decide how it is drawn. Geometry, placement-direction turn and textures are baked
+// into the permutation's render schematic while the game initializes the block, so they have to be on the permutation
+// by then; light is cached from the components afterwards.
+constexpr std::array<char const*, 4> PermutationShapeComponents{
+    "minecraft:geometry",
+    "minecraft:material_instances",
+    "minecraft:transformation",
+    "minecraft:light_emission",
 };
 
-// The definition's permutations that change how the block looks, with their conditions as the recording wrote them.
-// The recorded properties list the permutations in the definition's order; a decoded condition is the fallback when the
-// two disagree.
-std::vector<PermutationVisual>
-recordedPermutationVisuals(BlockDefinition const& definition, CompoundTag const& recorded) {
+struct PermutationVisual {
+    std::string                                   condition;
+    std::vector<BlockComponentDescription const*> components;
+};
+
+// The definition's permutations that set any of `names`, with their conditions as the recording wrote them. The
+// recorded properties list the permutations in the definition's order; a decoded condition is the fallback when the two
+// disagree.
+template <size_t Count>
+std::vector<PermutationVisual> recordedPermutationVisuals(
+    BlockDefinition const&                definition,
+    CompoundTag const&                    recorded,
+    std::array<char const*, Count> const& names
+) {
     std::vector<std::string> conditions;
     if (recorded.contains("permutations", Tag::Type::List)) {
         for (auto const& entry : recorded.at("permutations").get<ListTag>()) {
@@ -3721,17 +3786,96 @@ recordedPermutationVisuals(BlockDefinition const& definition, CompoundTag const&
     bool const                     aligned      = conditions.size() == descriptions.size();
     std::vector<PermutationVisual> visuals;
     for (size_t index = 0; index < descriptions.size(); ++index) {
-        auto const& components = *descriptions[index].mComponents;
-        PermutationVisual visual{
-            {},
-            components.getComponentDescription("minecraft:geometry"),
-            components.getComponentDescription("minecraft:material_instances"),
-        };
-        if (!visual.geometry && !visual.material) continue;
+        auto const&       components = *descriptions[index].mComponents;
+        PermutationVisual visual;
+        for (auto const* name : names) {
+            if (auto const* description = components.getComponentDescription(name)) {
+                visual.components.push_back(description);
+            }
+        }
+        if (visual.components.empty()) continue;
         visual.condition = aligned ? conditions[index] : descriptions[index].mCondition->getExpressionString();
         visuals.push_back(std::move(visual));
     }
     return visuals;
+}
+
+// 26.51 folds BlockGeometryDescription's storage overload into a stub; the context overload does the work and the base
+// class forwards it to the storage overload for other descriptions.
+void initializeBlockComponent(BlockType& type, BlockComponentDescription const& description, BlockComponentStorage& storage) {
+    struct {
+        BlockComponentStorage* storage;
+        BlockType*             blockType;
+    } layout{&storage, &type};
+    static_assert(sizeof(layout) == sizeof(BlockComponentDescription::InitializationContext));
+    description.initializeComponent(*reinterpret_cast<BlockComponentDescription::InitializationContext*>(&layout));
+}
+
+// Calls `apply` with each permutation of `type` and the descriptions of `visuals` whose conditions its states meet, in
+// file order, as the game applies them.
+template <class Apply>
+void forMatchingPermutations(BlockType& type, std::vector<PermutationVisual> const& visuals, Apply&& apply) {
+    for (auto const& permutation : *type.mBlockPermutations) {
+        if (!permutation || !permutation->mSerializationId->contains("states", Tag::Type::Compound)) continue;
+        auto const& states = permutation->mSerializationId->at("states").get<CompoundTag>();
+        for (auto const& visual : visuals) {
+            if (evaluateBlockStateCondition(visual.condition, states) != true) continue;
+            for (auto const* description : visual.components) apply(*permutation, *description);
+        }
+    }
+}
+
+std::vector<HeldBackShapes>
+shapeRecordedPermutations(BlockDefinitionGroup& definitions, std::vector<ServerBlockProperty> const& properties) {
+    auto&                       registry = BlockTypeRegistry::get();
+    std::vector<HeldBackShapes> held;
+    for (auto const& [name, tag] : properties) {
+        auto const* definition = definitions.tryGetBlockDefinition(name);
+        if (!definition) continue;
+        auto const shapes = recordedPermutationVisuals(*definition, *tag, PermutationShapeComponents);
+        if (shapes.empty()) continue;
+        auto blockType = registry.lookupByName(HashedString{name}, false);
+        if (!blockType) continue;
+        auto& type = const_cast<BlockType&>(*blockType);
+
+        auto apply = [&type](Block& permutation, BlockComponentDescription const& description) {
+            permutation.mComponents->allowComponentReplacement();
+            initializeBlockComponent(type, description, *permutation.mComponents);
+        };
+        // The base shape first, then the permutations over it.
+        auto& base = const_cast<BlockComponentGroupDescription&>(*definition->mBaseComponents);
+        for (auto const* componentName : PermutationShapeComponents) {
+            auto const* description = base.getComponentDescription(componentName);
+            if (!description) continue;
+            for (auto const& permutation : *type.mBlockPermutations) {
+                if (permutation) apply(*permutation, *description);
+            }
+        }
+        forMatchingPermutations(type, shapes, apply);
+
+        // Held back from initialization, which would put the base shape back on every permutation.
+        HeldBackShapes entry{&base, {}};
+        std::vector<BlockComponentDescription const*> shapeDescriptions;
+        for (auto const* componentName : PermutationShapeComponents) {
+            if (auto const* description = base.getComponentDescription(componentName)) {
+                shapeDescriptions.push_back(description);
+            }
+        }
+        std::erase_if(*base.mDescriptions, [&](std::shared_ptr<BlockComponentDescription> const& description) {
+            bool const shape = std::ranges::find(shapeDescriptions, description.get()) != shapeDescriptions.end();
+            if (shape) entry.descriptions.push_back(description);
+            return shape;
+        });
+        held.push_back(std::move(entry));
+    }
+    return held;
+}
+
+void restoreHeldBackShapes(std::vector<HeldBackShapes>& held) {
+    for (auto& [group, descriptions] : held) {
+        for (auto& description : descriptions) group->mDescriptions->push_back(std::move(description));
+    }
+    held.clear();
 }
 
 } // namespace
@@ -3792,60 +3936,33 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(std::vector<ServerBl
         if (!blockType) continue;
         auto& type = const_cast<BlockType&>(*blockType);
 
-        // 26.51 folds BlockGeometryDescription's storage overload into a stub; the context overload does the work and
-        // the base class forwards it to the storage overload for other descriptions.
-        auto initialize = [&type](BlockComponentDescription const& description, BlockComponentStorage& storage) {
-            struct {
-                BlockComponentStorage* storage;
-                BlockType*             blockType;
-            } layout{&storage, &type};
-            static_assert(sizeof(layout) == sizeof(BlockComponentDescription::InitializationContext));
-            description.initializeComponent(
-                *reinterpret_cast<BlockComponentDescription::InitializationContext*>(&layout)
-            );
-        };
-        auto injectInto = [&initialize](Block& permutation, BlockComponentDescription const& description) {
+        auto injectInto = [&type](Block& permutation, BlockComponentDescription const& description) {
             permutation.mComponents->allowComponentReplacement();
-            initialize(description, *permutation.mComponents);
+            initializeBlockComponent(type, description, *permutation.mComponents);
             permutation.finalizeBlockComponentStorage();
             BlockComponentStorageFinalizer{}.finalizeComponentData(permutation);
         };
         // Init layer only: the engine's rendering pass skips blocks whose Rendering layer is already marked.
         auto inject = [&](BlockComponentDescription const& description) {
             type.mComponents->allowComponentReplacement();
-            initialize(description, *type.mComponents);
+            initializeBlockComponent(type, description, *type.mComponents);
             BlockTypeComponentStorageFinalizer{}.finalizeComponentData(type);
             for (auto const& permutation : *type.mBlockPermutations) {
                 if (permutation) injectInto(*permutation, description);
             }
         };
 
-        auto const permutationVisuals = recordedPermutationVisuals(*definition, *tag);
-        if (materialDescription || !permutationVisuals.empty()) {
+        // Blocks whose permutations change how they are drawn got all of it before initialization.
+        if (!recordedPermutationVisuals(*definition, *tag, PermutationShapeComponents).empty()) {
+            ++modernInjected;
+            continue;
+        }
+        if (materialDescription) {
             if (geometryDescription) {
                 // The 26.51.6 headers stub NetworkedBlockComponentDescription, hiding the base; the call is virtual.
                 inject(*geometryDescription);
             }
-            if (materialDescription) {
-                inject(*reinterpret_cast<BlockMaterialInstancesDescription const*>(materialDescription));
-            }
-            // The base alone would draw every permutation alike: furniture that keeps its look in permutations (a
-            // blank base material, the wood and colour per state) went invisible. Matching permutations follow, in
-            // file order, as in the game.
-            for (auto const& permutation : *type.mBlockPermutations) {
-                if (!permutation || !permutation->mSerializationId->contains("states", Tag::Type::Compound)) continue;
-                auto const& states = permutation->mSerializationId->at("states").get<CompoundTag>();
-                for (auto const& visual : permutationVisuals) {
-                    if (evaluateBlockStateCondition(visual.condition, states) != true) continue;
-                    if (visual.geometry) injectInto(*permutation, *visual.geometry);
-                    if (visual.material) {
-                        injectInto(
-                            *permutation,
-                            *reinterpret_cast<BlockMaterialInstancesDescription const*>(visual.material)
-                        );
-                    }
-                }
-            }
+            inject(*reinterpret_cast<BlockMaterialInstancesDescription const*>(materialDescription));
             ++modernInjected;
             continue;
         }
@@ -4391,6 +4508,7 @@ void ReplaySession::resetDimensionScopedReplayState() {
     mDirectLevelChunkIndices.clear();
     mCenterChunkPositions.clear();
     mRecordedEntityIds.clear();
+    mRiderSeats.clear();
     gReplayHandBobTick.clear();
     gReplayHotbars.clear();
     clearReplayPlayers(false);
@@ -5841,7 +5959,16 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         auto const count = data.getVarInt().value();
         if (count < 0) throw std::runtime_error("Entity movement count cannot be negative");
 
-        bool const snapMovement = mSeekTargetTick >= 0 && mSnapMovementDuringSeek;
+        struct Sample {
+            ActorUniqueID id;
+            Vec3          position;
+            Vec2          rotation;
+            float         headYaw;
+            float         bodyYaw;
+            bool          onGround;
+        };
+        std::vector<Sample> samples;
+        samples.reserve(static_cast<size_t>(count));
         for (int index = 0; index < count; ++index) {
             ActorUniqueID const id{data.getVarInt64().value()};
             Vec3 const          position{data.getFloat().value(), data.getFloat().value(), data.getFloat().value()};
@@ -5849,13 +5976,43 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             float const         headYaw  = data.getFloat().value();
             float const         bodyYaw  = data.getFloat().value();
             bool const          onGround = data.getBool().value();
+            samples.push_back({id, position, rotation, headYaw, bodyYaw, onGround});
+        }
+        auto const sampleOf = [&samples](ActorUniqueID id) -> Sample const* {
+            auto const found = std::ranges::find(samples, id.rawID, [](Sample const& sample) { return sample.id.rawID; });
+            return found != samples.end() ? &*found : nullptr;
+        };
 
+        bool const snapMovement = mSeekTargetTick >= 0 && mSnapMovementDuringSeek;
+        for (auto const& [id, recordedPosition, rotation, headYaw, bodyYaw, onGround] : samples) {
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
             auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
             if (!actor) continue;
             // The observer is the free camera; skip its recorded movement.
             if (observerIsFree && actor == mReplayPlayer) {
                 continue;
+            }
+
+            // The recording player's own position trails its vehicle by about three ticks while it rides, so drawn
+            // where it was recorded it walked behind the bicycle it sat on. It keeps the seat it took when it got on,
+            // turned with the vehicle.
+            Vec3 position = recordedPosition;
+            if (auto* vehicle = actor->getVehicle()) {
+                if (auto const* seatSample = sampleOf(vehicle->getOrCreateUniqueID())) {
+                    auto const [seat, taken] = mRiderSeats.try_emplace(
+                        id.rawID,
+                        RiderSeat{recordedPosition - seatSample->position, seatSample->rotation.y}
+                    );
+                    float const turn   = (seatSample->rotation.y - seat->second.vehicleYaw) * std::numbers::pi_v<float> / 180.0f;
+                    auto const& offset = seat->second.offset;
+                    position           = seatSample->position + Vec3{
+                        offset.x * std::cos(turn) - offset.z * std::sin(turn),
+                        offset.y,
+                        offset.x * std::sin(turn) + offset.z * std::cos(turn),
+                    };
+                }
+            } else {
+                mRiderSeats.erase(id.rawID);
             }
 
             auto const previousPose  = replayRenderPose(*actor);
@@ -5873,8 +6030,8 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 mEntityRenderKeys.insert_or_assign(id, *renderKey);
                 visuals::queueReplayEntityPose(*renderKey, previousPose, currentPose);
             }
-
-            if (actor->isRiding(nullptr)) {
+            // A rider is moved with its vehicle; a teleport would throw it off.
+            if (actor->getVehicle()) {
                 actor->mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
                 actor->mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
                 pinReplayEntityHeadRotation(*actor, headYaw, bodyYaw);
@@ -6529,6 +6686,16 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
 
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+
+    if (mReplayPlayer) {
+        if (packetId == MinecraftPacketIds::AddActor) {
+            for (auto const& link : *static_cast<AddActorPacket const&>(*packet).mLinks) {
+                forceRecordedRide(mReplayPlayer->getLevel(), link);
+            }
+        } else if (packetId == MinecraftPacketIds::SetActorLink) {
+            forceRecordedRide(mReplayPlayer->getLevel(), *static_cast<SetActorLinkPacket const&>(*packet).mLink);
+        }
+    }
 
     if (packetId == MinecraftPacketIds::LevelEvent) {
         using SharedTypes::Legacy::LevelEvent;

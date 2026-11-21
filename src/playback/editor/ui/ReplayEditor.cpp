@@ -7,6 +7,7 @@
 #include "playback/editor/ui/ErrorDialog.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/integration/ArkeBridge.h"
+#include "playback/integration/FlatShaderPack.h"
 #include "playback/replay/ReplaySession.h"
 
 #include "imgui.h"
@@ -151,6 +152,7 @@ void ReplayEditor::syncViewShading(playback::state::EditorState const& state) {
         mViewShadingLive = true;
         mShaderPacks     = integration::arkeShaderPacks();
         if (!mRenderShaderPackChosen) mRenderShaderPack = integration::arkeConfiguredShader();
+        mFlatShaderPack = integration::isArkeLoaded() ? integration::installFlatShaderPack() : std::string{};
     }
     if (mShaderPackInfoFor != mRenderShaderPack) {
         mShaderPackInfoFor = mRenderShaderPack;
@@ -158,7 +160,14 @@ void ReplayEditor::syncViewShading(playback::state::EditorState const& state) {
         mShaderPackInfo    = path ? integration::readShaderPack(*path) : std::nullopt;
         mUserShaderOptions = integration::arkeShaderOptions(mRenderShaderPack);
     }
-    session.setFlatPreview(mViewShading == ViewShading::Flat && !exportLook);
+    bool const flat = mViewShading == ViewShading::Flat && !exportLook;
+    session.setFlatPreview(flat);
+    // Flat runs Playback's own pack on Arke: texture colours only, with no lighting, face shading or occlusion, which
+    // the game's renderer keeps even at full brightness.
+    if (flat && !mFlatShaderPack.empty()) {
+        integration::applyArkeShader(mFlatShaderPack);
+        return;
+    }
     // An export renders with the Rendered pack whatever the viewport shows. It goes on as the export dialog opens: a
     // pack switched on as the export starts captures its first seconds dark and smeared while its exposure and
     // temporal buffers build up from black.
@@ -170,7 +179,8 @@ void ReplayEditor::syncViewShading(playback::state::EditorState const& state) {
     }
     integration::applyArkeShader(
         mRenderShaderPack,
-        state.project ? shaderOptionsFor(state.project->world) : std::map<std::string, std::string>{}
+        state.project ? shaderOptionsFor(state::editing::model::worldAt(state.project->world, state.currentTick))
+                      : std::map<std::string, std::string>{}
     );
 }
 
@@ -371,6 +381,18 @@ void ReplayEditor::openExportDialog() {
         currentState.capabilities.ffmpegVideoExport,
         mVideoAspectRatio
     );
+}
+
+void ReplayEditor::exportStillFrame() {
+    auto const& currentState = state();
+    if (!currentState.capabilities.videoExport || currentState.totalTicks <= 0
+        || exporting::isExportActive(currentState.exportStatus.state)) {
+        return;
+    }
+    playback::state::EditorAction action{playback::state::EditorActionType::StartExport};
+    action.exportSettings =
+        mMenuBar.stillFrameSettings(currentState.currentTick, currentState.totalTicks, mVideoAspectRatio);
+    submitAction(std::move(action));
 }
 
 PanelContext ReplayEditor::frameContext() {

@@ -16,6 +16,8 @@
 #include <string>
 #include <unordered_map>
 
+#include <type_traits>
+
 namespace playback::editor::ui::widgets {
 
 using namespace ll::i18n_literals;
@@ -148,9 +150,9 @@ struct ButtonFrame {
 };
 
 // Square hit box with the shared hover/held/active fill; callers only add the glyph on top.
-ButtonFrame squareButton(char const* id, bool enabled, bool active) {
+ButtonFrame squareButton(char const* id, bool enabled, bool active, float size = 0.0f) {
     ButtonFrame frame{};
-    frame.size   = iconButtonSize();
+    frame.size   = size > 0.0f ? size : iconButtonSize();
     frame.origin = ImGui::GetCursorScreenPos();
 
     ImGui::BeginDisabled(!enabled);
@@ -177,9 +179,11 @@ ButtonFrame squareButton(char const* id, bool enabled, bool active) {
 }
 
 // ImGui::Button centres by advance width, which drifts for monospaced icon glyphs.
-bool iconButtonImpl(char const* id, char const* icon, char const* tooltip, bool enabled, bool active) {
-    ButtonFrame const frame = squareButton(id, enabled, active);
-    drawIconCentred(ImGui::GetWindowDrawList(), icon, frame.origin, frame.size, frame.color);
+bool iconButtonImpl(char const* id, char const* icon, char const* tooltip, bool enabled, bool active, float size = 0.0f) {
+    ButtonFrame const frame = squareButton(id, enabled, active, size);
+    // A compact button keeps the glyph in the same proportion to its box as the standard one.
+    float const glyph = size > 0.0f ? size * metrics::iconGlyph() / iconButtonSize() : 0.0f;
+    drawIconCentred(ImGui::GetWindowDrawList(), icon, frame.origin, frame.size, frame.color, glyph);
     itemTooltip(tooltip);
     return frame.clicked;
 }
@@ -332,8 +336,15 @@ bool vectorIconButton(char const* id, VectorIcon icon, char const* tooltip, bool
     return frame.clicked;
 }
 
-void drawIconCentred(ImDrawList* drawList, char const* icon, ImVec2 const& origin, float boxSize, ImU32 color) {
-    float const iconSize = iconGlyphSize();
+void drawIconCentred(
+    ImDrawList*   drawList,
+    char const*   icon,
+    ImVec2 const& origin,
+    float         boxSize,
+    ImU32         color,
+    float         glyphSize
+) {
+    float const iconSize = glyphSize > 0.0f ? glyphSize : iconGlyphSize();
     // CalcTextSize reports the line box; the glyph's own X0/Y0/X1/Y1 are the ink bounds to centre on.
     ImFontGlyph const* glyph = nullptr;
     if (auto const codepoint = decodeUtf8(icon)) {
@@ -356,8 +367,8 @@ void drawIconCentred(ImDrawList* drawList, char const* icon, ImVec2 const& origi
     drawList->AddText(ImGui::GetFont(), iconSize, position, color, icon);
 }
 
-void drawIconAtCentre(ImDrawList* drawList, char const* icon, ImVec2 const& centre, ImU32 color) {
-    float const        iconSize = iconGlyphSize();
+void drawIconAtCentre(ImDrawList* drawList, char const* icon, ImVec2 const& centre, ImU32 color, float glyphSize) {
+    float const        iconSize = glyphSize > 0.0f ? glyphSize : iconGlyphSize();
     ImFontGlyph const* glyph    = nullptr;
     if (auto const codepoint = decodeUtf8(icon)) {
         if (ImFontBaked* baked = ImGui::GetFont()->GetFontBaked(iconSize)) {
@@ -366,7 +377,14 @@ void drawIconAtCentre(ImDrawList* drawList, char const* icon, ImVec2 const& cent
     }
     if (!glyph) {
         ImVec2 const fallback = ImGui::CalcTextSize(icon);
-        drawIconCentred(drawList, icon, {centre.x - fallback.x * 0.5f, centre.y - fallback.y * 0.5f}, 0.0f, color);
+        drawIconCentred(
+            drawList,
+            icon,
+            {centre.x - fallback.x * 0.5f, centre.y - fallback.y * 0.5f},
+            0.0f,
+            color,
+            iconSize
+        );
         return;
     }
     ImVec2 const position{
@@ -382,6 +400,10 @@ bool iconButton(char const* id, char const* icon, char const* tooltip, bool enab
 
 bool iconToggle(char const* id, char const* icon, char const* tooltip, bool active, bool enabled) {
     return iconButtonImpl(id, icon, tooltip, enabled, active);
+}
+
+bool compactIconToggle(char const* id, char const* icon, char const* tooltip, bool active, float size) {
+    return iconButtonImpl(id, icon, tooltip, true, active, size);
 }
 
 float dropdownChipWidth(char const* label, char const* icon) {
@@ -553,6 +575,201 @@ void endCombo() {
 
 void noActiveProjectPlaceholder() {
     ImGui::TextDisabled("%s", "playback.refactorEditor.common.noActiveProject"_tr().c_str());
+}
+
+namespace {
+
+// A number field dragged left and right, as in a 3D package: crossing the field's width sweeps a bounded value's
+// whole range (Shift is faster, Alt finer), a double-click or Ctrl+click types a value, and a bounded field shows
+// where the value sits in its range as a fill behind the number.
+bool scrubber(
+    char const*      id,
+    ImGuiDataType    type,
+    void*            value,
+    double           current,
+    void const*      low,
+    void const*      high,
+    double           lowValue,
+    double           highValue,
+    float            speed,
+    char const*      format,
+    ImGuiSliderFlags flags
+) {
+    bool const  bounded = highValue > lowValue;
+    float const width   = ImGui::CalcItemWidth();
+    if (speed <= 0.0f) {
+        speed = bounded ? static_cast<float>((highValue - lowValue) / std::max(48.0, static_cast<double>(width))) : 0.05f;
+        if (type == ImGuiDataType_S32) speed = std::max(speed, 0.02f);
+    }
+    auto*              drawList = ImGui::GetWindowDrawList();
+    ImDrawListSplitter splitter;
+    splitter.Split(drawList, 2);
+    splitter.SetCurrentChannel(drawList, 1);
+    // The frame is drawn underneath with the fill, so the number stays on top of both.
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0, 0, 0, 0));
+    bool const changed = ImGui::DragScalar(
+        id,
+        type,
+        value,
+        speed,
+        bounded ? low : nullptr,
+        bounded ? high : nullptr,
+        format,
+        flags | (bounded ? ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None)
+    );
+    ImGui::PopStyleColor(3);
+    ImVec2 const min     = ImGui::GetItemRectMin();
+    ImVec2 const max     = ImGui::GetItemRectMax();
+    bool const   hovered = ImGui::IsItemHovered();
+    bool const   active  = ImGui::IsItemActive();
+    bool const   typing  = active && ImGui::GetIO().WantTextInput;
+
+    splitter.SetCurrentChannel(drawList, 0);
+    float const rounding = ImGui::GetStyle().FrameRounding;
+    ImU32 const frame    = active ? theme::kInputBgActive : hovered ? theme::kInputBgHover : theme::kInputBg;
+    drawList->AddRectFilled(min, max, ImGui::GetColorU32(frame), rounding);
+    if (bounded && !typing) {
+        double const t = std::clamp((current - lowValue) / (highValue - lowValue), 0.0, 1.0);
+        if (t > 0.0) {
+            ImU32 const fill = theme::withAlpha(theme::kAccent, active ? 0x78 : hovered ? 0x5c : 0x40);
+            drawList->AddRectFilled(
+                min,
+                {min.x + (max.x - min.x) * static_cast<float>(t), max.y},
+                ImGui::GetColorU32(fill),
+                rounding
+            );
+        }
+    }
+    splitter.Merge(drawList);
+    if ((hovered || active) && !typing) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    return changed;
+}
+
+} // namespace
+
+bool dragFloat(char const* id, float* value, float low, float high, char const* format, float speed) {
+    return scrubber(id, ImGuiDataType_Float, value, *value, &low, &high, low, high, speed, format, ImGuiSliderFlags_None);
+}
+
+bool dragInt(char const* id, int* value, int low, int high, char const* format, float speed) {
+    return scrubber(id, ImGuiDataType_S32, value, *value, &low, &high, low, high, speed, format, ImGuiSliderFlags_None);
+}
+
+bool dragFloatN(char const* id, float* values, int count, float speed, char const* format, float low, float high) {
+    // Each component is its own scrubber, side by side, as ImGui's DragFloat2/3 lay them out.
+    float const spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+    float const total   = ImGui::CalcItemWidth();
+    float const each    = std::max(1.0f, (total - spacing * static_cast<float>(count - 1)) / static_cast<float>(count));
+    bool        changed = false;
+    ImGui::PushID(id);
+    for (int index = 0; index < count; ++index) {
+        if (index > 0) ImGui::SameLine(0.0f, spacing);
+        ImGui::PushID(index);
+        ImGui::SetNextItemWidth(each);
+        changed |= dragFloat("##component", &values[index], low, high, format, speed);
+        ImGui::PopID();
+    }
+    ImGui::PopID();
+    return changed;
+}
+
+bool toggleRow(char const* id, char const* icon, char const* label, bool* value, char const* tooltip) {
+    float const  scale   = metrics::scale();
+    float const  height  = std::floor(ImGui::GetFrameHeight() + 4.0f * scale);
+    ImVec2 const origin  = ImGui::GetCursorScreenPos();
+    float const  width   = std::max(height * 3.0f, ImGui::GetContentRegionAvail().x);
+    bool const   clicked = ImGui::InvisibleButton(id, {width, height});
+    bool const   hovered = ImGui::IsItemHovered();
+    if (clicked) *value = !*value;
+    if (tooltip) itemTooltip(tooltip);
+
+    auto*       drawList = ImGui::GetWindowDrawList();
+    float const centreY  = std::floor(origin.y + height * 0.5f + 0.5f);
+    if (hovered) {
+        drawList->AddRectFilled(
+            origin,
+            {origin.x + width, origin.y + height},
+            ImGui::GetColorU32(theme::withAlpha(theme::kButtonHover, 0x90)),
+            theme::kFrameRounding * scale
+        );
+    }
+    float       x     = origin.x + 4.0f * scale;
+    float const glyph = std::floor(metrics::font() * 1.05f);
+    if (icon) {
+        ImU32 const iconColor = *value ? theme::kIconActive : theme::kIconInactive;
+        drawIconAtCentre(drawList, icon, {x + glyph * 0.5f, centreY}, ImGui::GetColorU32(iconColor), glyph);
+        x += glyph + 8.0f * scale;
+    }
+    // The switch: a flat pill, accent with the knob right when on, grey with the knob left when off.
+    float const  pillH = std::floor(height * 0.6f);
+    float const  pillW = std::floor(pillH * 1.8f);
+    ImVec2 const pillMin{origin.x + width - pillW - 4.0f * scale, centreY - pillH * 0.5f};
+    ImVec2 const pillMax{pillMin.x + pillW, pillMin.y + pillH};
+    drawList->AddRectFilled(
+        pillMin,
+        pillMax,
+        ImGui::GetColorU32(*value ? theme::kAccent : theme::kButtonActive),
+        pillH * 0.5f
+    );
+    float const knob  = pillH * 0.5f - 2.0f * scale;
+    float const knobX = *value ? pillMax.x - pillH * 0.5f : pillMin.x + pillH * 0.5f;
+    drawList->AddCircleFilled({knobX, centreY}, knob, ImGui::GetColorU32(theme::kIconHighlight));
+
+    ImVec4 const clip{x, origin.y, pillMin.x - 6.0f * scale, origin.y + height};
+    drawList->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        {x, textYForCentre(centreY, label)},
+        ImGui::GetColorU32(theme::kText),
+        label,
+        nullptr,
+        0.0f,
+        &clip
+    );
+    return clicked;
+}
+
+void fieldLabel(char const* icon, char const* text) {
+    if (icon) ImGui::TextDisabled("%s  %s", icon, text);
+    else ImGui::TextDisabled("%s", text);
+    ImGui::SetNextItemWidth(-1.0f);
+}
+
+namespace {
+
+// The value a held field works on: the caller's value is re-read from the project every frame and only changes once
+// the edit is committed, so the drag accumulates here until release.
+template <typename T, typename Draw>
+bool onRelease(char const* id, T* value, Draw&& draw) {
+    ImGuiStorage* storage = ImGui::GetStateStorage();
+    ImGuiID const key     = ImGui::GetID(id);
+    ImGuiID const heldKey = key ^ 0x9e3779b9u;
+    bool const    held    = storage->GetBool(heldKey, false);
+    T             working = *value;
+    if (held) {
+        if constexpr (std::is_same_v<T, float>) working = storage->GetFloat(key, *value);
+        else working = storage->GetInt(key, *value);
+    }
+    draw(&working);
+    bool const active = ImGui::IsItemActive();
+    storage->SetBool(heldKey, active);
+    if constexpr (std::is_same_v<T, float>) storage->SetFloat(key, working);
+    else storage->SetInt(key, working);
+    if (!ImGui::IsItemDeactivatedAfterEdit()) return false;
+    *value = working;
+    return true;
+}
+
+} // namespace
+
+bool dragFloatOnRelease(char const* id, float* value, float low, float high, char const* format, float speed) {
+    return onRelease(id, value, [&](float* working) { dragFloat(id, working, low, high, format, speed); });
+}
+
+bool dragIntOnRelease(char const* id, int* value, int low, int high, char const* format, float speed) {
+    return onRelease(id, value, [&](int* working) { dragInt(id, working, low, high, format, speed); });
 }
 
 } // namespace playback::editor::ui::widgets

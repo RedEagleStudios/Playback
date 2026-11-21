@@ -46,6 +46,10 @@ struct SelectedCamera {
 struct SelectedPoseKey {
     std::string poseKeyId;
 };
+// A title, shape or model layer.
+struct SelectedOverlay {
+    std::string overlayId;
+};
 
 using Selection = std::variant<
     SelectedKeyframe,
@@ -57,7 +61,8 @@ using Selection = std::variant<
     SelectedWorldActorSegment,
     SelectedSubActor,
     SelectedCamera,
-    SelectedPoseKey>;
+    SelectedPoseKey,
+    SelectedOverlay>;
 
 struct EditorStateExt;
 

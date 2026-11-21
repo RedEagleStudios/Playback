@@ -270,38 +270,6 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class SetCameraKeyframeFov final : public model::IEditCommand {
-public:
-    SetCameraKeyframeFov(std::string cameraId, int tick, float fov);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mCameraId;
-    int                                  mTick;
-    float                                mFov;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
-// Sets a keyframe track key's shake strength, and its frequency when given (none keeps the key's own).
-class SetCameraKeyframeShake final : public model::IEditCommand {
-public:
-    SetCameraKeyframeShake(std::string cameraId, int tick, float shake, std::optional<float> frequency);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mCameraId;
-    int                                  mTick;
-    float                                mShake;
-    std::optional<float>                 mFrequency;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
 class SetCameraKeyframeSubject final : public model::IEditCommand {
 public:
     SetCameraKeyframeSubject(std::string cameraId, int tick, std::string subject);
@@ -347,10 +315,10 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
-// Replaces a keyframe track's shake settings; locked tracks and other kinds are left alone.
-class SetCameraShake final : public model::IEditCommand {
+// Replaces a keyframe track's FOV and shake properties and their keys; locked tracks and other kinds are left alone.
+class SetCameraProperties final : public model::IEditCommand {
 public:
-    SetCameraShake(std::string cameraId, model::ShakeSettings const& shake);
+    SetCameraProperties(std::string cameraId, model::CameraProperties properties);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -358,7 +326,7 @@ public:
 
 private:
     std::string                          mCameraId;
-    model::ShakeSettings                 mShake;
+    model::CameraProperties              mProperties;
     std::optional<model::EditorStateExt> mBefore;
 };
 

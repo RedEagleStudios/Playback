@@ -349,6 +349,13 @@ private:
     std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
     std::unordered_set<int32_t>                                 mUnknownConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
+    // Where each rider sits on its vehicle, from their recorded poses when it got on: the vehicle's yaw then and the
+    // rider's offset from it, by rider unique ID. Dropped when the rider is off.
+    struct RiderSeat {
+        Vec3  offset;
+        float vehicleYaw{};
+    };
+    std::unordered_map<int64_t, RiderSeat> mRiderSeats;
     // A /playanimation clip that a seek's catch-up started. The client drops clips sent before the actor's renderer has
     // set up its animations, and plays the rest from 0, so its packet is sent again until the actor holds it and its
     // clock is then moved on to the time it had played by the recording. The last clip per entity runtime ID, then the

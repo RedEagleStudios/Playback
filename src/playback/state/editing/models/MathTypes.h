@@ -6,14 +6,20 @@ namespace playback::state::editing::model {
 
 struct Vec3 {
     float x{}, y{}, z{};
+
+    bool operator==(Vec3 const&) const = default;
 };
 
 struct Vec2 {
     float x{}, y{};
+
+    bool operator==(Vec2 const&) const = default;
 };
 
 struct Color4 {
     float r{1}, g{1}, b{1}, a{1};
+
+    bool operator==(Color4 const&) const = default;
 
     static Color4 Black() { return {0, 0, 0, 1}; }
     static Color4 White() { return {1, 1, 1, 1}; }

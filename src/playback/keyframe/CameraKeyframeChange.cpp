@@ -20,8 +20,9 @@ float interpolateAngle(float left, float right, float amount) {
 
 void CameraKeyframeChange::apply(CameraKeyframeHandler& handler) const { handler.applyCamera(*this); }
 
+// The FOV is the track's own property; the evaluator sets it after the Transform is sampled.
 CameraRenderState CameraKeyframeChange::toRenderState() const noexcept {
-    return {position.x, position.y, position.z, yaw, pitch, roll, fov};
+    return {position.x, position.y, position.z, yaw, pitch, roll};
 }
 
 CameraKeyframeChange
@@ -36,8 +37,6 @@ CameraKeyframeChange::interpolate(CameraKeyframeChange const& left, CameraKeyfra
         interpolateAngle(left.yaw, right.yaw, amount),
         interpolateAngle(left.pitch, right.pitch, amount),
         interpolateAngle(left.roll, right.roll, amount),
-        left.fov + (right.fov - left.fov) * amount,
-        left.shake + (right.shake - left.shake) * amount,
     };
 }
 

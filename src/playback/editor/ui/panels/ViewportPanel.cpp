@@ -1,5 +1,6 @@
 ﻿#include "ViewportPanel.h"
 
+#include "playback/editor/input/FlySpeed.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
@@ -177,6 +178,42 @@ void ViewportPanel::draw(PanelContext const& ctx, bool maximized) {
         ImVec2 const uvMin((shownMinX - imageMin.x) / imageSize.x, 0.0f);
         ImVec2 const uvMax((shownMaxX - imageMin.x) / imageSize.x, 1.0f);
         drawList->AddImage(ImTextureRef(mGameTexture), {shownMinX, videoMin.y}, {shownMaxX, videoMax.y}, uvMin, uvMax);
+        // Layers over the picture, framed like the export: the camera's view spans the whole game image.
+        if (auto const* project = ctx.project()) {
+            std::optional<overlay::OverlayCamera> camera;
+            if (ctx.cameraProjection) {
+                camera = overlay::OverlayCamera{
+                    ctx.cameraProjection->viewProjection,
+                    static_cast<double>(ctx.cameraProjection->nearClipW),
+                    mImageRect.min.x - videoMin.x,
+                    mImageRect.min.y - videoMin.y,
+                    mImageRect.max.x - videoMin.x,
+                    mImageRect.max.y - videoMin.y,
+                };
+            }
+            drawList->PushClipRect(videoMin, videoMax, true);
+            mOverlayPreview.draw(
+                drawList,
+                project->overlays,
+                static_cast<double>(ctx.state.currentTick),
+                videoMin,
+                videoMax,
+                camera
+            );
+            drawList->PopClipRect();
+        }
+        if (mThirdsVisible) {
+            // Rule of thirds: the frame cut in three each way, where the eye looks for the subject.
+            float const thickness = std::max(1.0f, metrics::scale());
+            for (int line = 1; line <= 2; ++line) {
+                float const x = std::round(videoMin.x + videoSize.x * static_cast<float>(line) / 3.0f);
+                float const y = std::round(videoMin.y + videoSize.y * static_cast<float>(line) / 3.0f);
+                drawList->AddLine({x, videoMin.y}, {x, videoMax.y}, IM_COL32(0, 0, 0, 0x50), thickness + 2.0f);
+                drawList->AddLine({videoMin.x, y}, {videoMax.x, y}, IM_COL32(0, 0, 0, 0x50), thickness + 2.0f);
+                drawList->AddLine({x, videoMin.y}, {x, videoMax.y}, theme::kThirdsGuide, thickness);
+                drawList->AddLine({videoMin.x, y}, {videoMax.x, y}, theme::kThirdsGuide, thickness);
+            }
+        }
         mCameraPath.draw(ctx, mImageRect, mVideoRect, drawList);
     } else {
         mCameraPath.clear();
@@ -197,6 +234,7 @@ void ViewportPanel::draw(PanelContext const& ctx, bool maximized) {
     mOverlayRect = {};
     if (mInfoOverlayVisible) drawInfoOverlay(ctx, videoMin, drawList);
     if (maximized) drawFloatingTransport(ctx, sceneMin, sceneMax);
+    input::drawFlySpeedIndicator(drawList, videoMin, videoMax);
 }
 
 void ViewportPanel::drawToolbar(PanelContext const& ctx) {
@@ -367,7 +405,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
 
     // View shading sits at the right edge as in a 3D package: three modes and the Rendered shader pack under the arrow.
     float const unit      = metrics::iconButton();
-    float const shadingAt = width - metrics::gutter() - unit - metrics::gutter() * 2.0f - unit * 4.0f;
+    float const shadingAt = width - metrics::gutter() - unit * 3.0f - metrics::gutter() * 2.0f - unit * 4.0f;
     ImGui::SameLine(std::max(0.0f, shadingAt), 0.0f);
     ImGui::SetCursorPosY((height - unit) * 0.5f);
     {
@@ -418,6 +456,24 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     // Maximize sits with the transport controls; the camera-path toggle stays in the View menu.
     ImGui::SameLine(0.0f, metrics::gutter() * 2.0f);
     ImGui::SetCursorPosY((height - unit) * 0.5f);
+    if (widgets::iconToggle(
+            "viewport-thirds",
+            ICON_THIRDS,
+            "playback.refactorEditor.viewport.thirdsGrid"_tr().c_str(),
+            mThirdsVisible
+        )) {
+        mThirdsVisible = !mThirdsVisible;
+    }
+    ImGui::SameLine(0.0f, 0.0f);
+    if (widgets::iconButton(
+            "viewport-still",
+            ICON_STILL,
+            "playback.refactorEditor.viewport.exportStill"_tr().c_str(),
+            state.capabilities.videoExport && !exporting::isExportActive(state.exportStatus.state) && state.totalTicks > 0
+        )) {
+        ctx.commands.exportStillFrame();
+    }
+    ImGui::SameLine(0.0f, 0.0f);
     if (widgets::iconToggle(
             "viewport-info",
             ICON_INFO,

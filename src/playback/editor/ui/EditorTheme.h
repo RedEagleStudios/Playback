@@ -64,6 +64,13 @@ constexpr ImU32 kExportRange       = withAlpha(kAccent, 0x59);
 constexpr ImU32 kExportBracket = IM_COL32(0xf0, 0xf2, 0xf5, 0xff);
 constexpr ImU32 kExportBand    = IM_COL32(0xff, 0xaa, 0x00, 0x60);
 constexpr ImU32 kTrackDisabled = IM_COL32(0x3a, 0x3a, 0x3a, 0xff);
+// Layer lanes: the replay's own segments and the title, shape and model layers over it.
+constexpr ImU32 kReplayLayer = IM_COL32(0xd8, 0x8a, 0x3a, 0xff);
+constexpr ImU32 kLayerTitle  = IM_COL32(0x5a, 0x9c, 0xe8, 0xff);
+constexpr ImU32 kLayerShape  = IM_COL32(0xa8, 0x82, 0xe0, 0xff);
+constexpr ImU32 kLayerModel  = IM_COL32(0x4c, 0xc4, 0x9a, 0xff);
+// Thirds guide over the viewport picture.
+constexpr ImU32 kThirdsGuide = IM_COL32(0xff, 0xff, 0xff, 0x70);
 
 // Cameras take a colour from this palette by creation order; the row fill uses it at low alpha.
 constexpr ImU32 kTrackPalette[] = {

@@ -39,6 +39,7 @@ private:
     bool               saveProject(std::filesystem::path const& path);
     void               autosaveIfDue();
     void               flushProjectOnClose();
+    void               skipCutReplayGaps();
     [[nodiscard]] bool isProjectDirty() const { return mCommandStack.revision() != mSavedRevision; }
     [[nodiscard]] std::optional<state::editing::model::CameraKeyframe> captureCameraKeyframe() const;
     void                                                               refreshBrowser();
@@ -65,6 +66,12 @@ private:
     std::optional<std::string>                     mPreviewCameraId;
     // A world slider being dragged (PreviewWorldSettings); shown instead of the project's until committed.
     std::optional<state::editing::model::WorldSettings> mWorldPreview;
+    // Layers being dragged in the inspector (PreviewOverlays); shown instead of the project's until committed.
+    std::optional<std::vector<state::editing::model::OverlayItem>> mOverlayPreview;
+    // A jump over a cut is a seek, which pauses the replay; playback picks up again once it lands.
+    bool mResumeAfterCutJump{};
+    // A camera's properties being dragged in the inspector (PreviewCameraProperties), by camera id.
+    std::optional<std::pair<std::string, state::editing::model::CameraProperties>> mCameraPreview;
     int                                            mProjectTotalTicks{-1};
     bool                                           mExportTickedBeforeClientUpdate{};
     bool                                           mExportTickReentered{};

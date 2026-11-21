@@ -94,6 +94,14 @@ private:
     void queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys);
     void queueMarkerSelection(std::string markerId);
     void queuePoseKeySelection(std::string poseKeyId);
+    void queueOverlaySelection(std::string overlayId);
+    // A title, shape or model layer from the playhead, selected once it exists. A model asks for its file first.
+    void addLayer(
+        PanelContext const&                ctx,
+        state::editing::model::OverlayKind kind,
+        state::editing::model::ShapeKind   shape  = state::editing::model::ShapeKind::Rectangle,
+        int                                points = 3
+    );
     void applyPendingSelection(PanelContext const& ctx);
     [[nodiscard]] std::string markerAt(
         PanelContext const&  ctx,
@@ -116,6 +124,27 @@ private:
     void drawExportRange(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale, bool allowInput);
 
     void drawContextMenus(PanelContext const& ctx);
+    void drawLayerMenus(PanelContext const& ctx);
+    // A Property row's lane: its value as a curve over the timeline and its keys, which drag, and right-click for
+    // easing or delete.
+    void drawPropertyLane(
+        PanelContext const&  ctx,
+        TrackTreeRow const&  row,
+        Layout const&        layout,
+        TimelineScale const& scale,
+        float                top,
+        float                bottom,
+        bool                 allowInput,
+        bool&                clickConsumed
+    );
+    void drawChannelKeyMenu(PanelContext const& ctx);
+    // Edits the keyed channels of a camera, layer or the World as one undo step.
+    void editChannels(
+        PanelContext const&                                                ctx,
+        PropertyOwner                                                      owner,
+        std::string const&                                                 ownerId,
+        std::function<void(state::editing::model::ValueChannels&)> const& edit
+    );
 
     void drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput);
     void drawTitleLabel(PanelContext const& ctx, float height);
@@ -132,6 +161,17 @@ private:
     std::string    mTrackSearch;
     bool           mSnapEnabled{true};
     bool           mDraggingPlayhead{};
+    // Rows shown with their property rows, by row id.
+    std::set<std::string> mExpandedRows;
+    // A property key being dragged (its row id and tick, in the channel's own ticks) and its right-click menu.
+    std::string mChannelDragRow;
+    int         mChannelDragKey{};
+    int         mChannelDragTick{};
+    int         mChannelDragOffset{};
+    float       mChannelDragStartX{};
+    bool        mChannelDragMoved{};
+    std::string mChannelMenuRow;
+    int         mChannelMenuKey{};
     // 0 none, 1 in marker, 2 out marker.
     int         mExportMarkerDrag{};
     std::string mDraggingKeyframeCameraId;
@@ -184,11 +224,26 @@ private:
     std::string mPoseLaneMenuSubject;
     std::string mPoseLaneMenuLabel;
     int         mPoseLaneMenuTick{-1};
+    // Layer bars and replay segments: the body moves a layer (mode 0), an edge trims either (1 start, 2 end); -1 only
+    // seeks on release.
+    std::string mClipDragId;
+    bool        mClipDragReplay{};
+    int         mClipDragMode{};
+    float       mClipDragStartX{};
+    int         mClipDragOriginStart{};
+    int         mClipDragOriginEnd{};
+    int         mClipDragStart{};
+    int         mClipDragEnd{};
+    bool        mClipDragMoved{};
+    std::string mOverlayMenuId;
+    std::string mSegmentMenuId;
+    int         mSegmentMenuTick{-1};
     int                   mSnapGuideTick{-1};
 
     std::vector<state::editing::model::SelectedKeyframe> mPendingKeySelection;
     std::string                                          mPendingMarkerSelection;
     std::string                                          mPendingPoseKeySelection;
+    std::string                                          mPendingOverlaySelection;
     int                                                  mPendingSelectionFrames{};
 };
 

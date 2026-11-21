@@ -49,6 +49,8 @@ public:
     [[nodiscard]] virtual float videoAspectRatio() const            = 0;
     virtual void                setVideoAspectRatio(float ratio)    = 0;
     virtual void                openExportDialog()                  = 0;
+    // Exports the frame under the playhead as one PNG, with the export dialog's folder and quality.
+    virtual void exportStillFrame() = 0;
     // Shows the selected camera-switch segment in the inspector with its subject search focused.
 
     // The export range is owned by the export dialog but drawn on the timeline as in/out markers.

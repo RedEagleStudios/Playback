@@ -68,6 +68,8 @@ struct PngSequenceWriter::Impl {
     std::filesystem::path   directory;
     FrameWriterState        state{FrameWriterState::Idle};
     bool                    ownsDirectory{};
+    // A still frame export writes its one frame here instead of numbering frames in `directory`.
+    std::filesystem::path   stillFile;
     uint64_t                submitted{};
     uint64_t                written{};
     uint64_t                nextFrameIndex{};
@@ -137,8 +139,9 @@ struct PngSequenceWriter::Impl {
                 break;
             }
             detail::copyPackedRgba(item.frame, rgba);
-            auto const output  = framePath(directory, item.index);
-            auto const partial = temporaryFramePath(directory, item.index);
+            auto const output  = stillFile.empty() ? framePath(directory, item.index) : stillFile;
+            auto       partial = output;
+            partial += ".part";
             bool const encoded =
                 visuals::writeRgbaPng(partial, item.frame.width, item.frame.height, rgba.data(), item.frame.width * 4);
 
@@ -177,7 +180,13 @@ struct PngSequenceWriter::Impl {
             cleanupFrameCount = nextFrameIndex;
             queue.clear();
         }
-        removeIncompleteOutput(cleanupDirectory, ownsDirectoryCopy, cleanupFrameCount);
+        // A still frame shares the exports folder, so only its own file is removed.
+        if (stillFile.empty()) {
+            removeIncompleteOutput(cleanupDirectory, ownsDirectoryCopy, cleanupFrameCount);
+        } else {
+            std::error_code ec;
+            std::filesystem::remove(stillFile, ec);
+        }
 
         {
             std::scoped_lock lock(mutex);
@@ -191,6 +200,7 @@ struct PngSequenceWriter::Impl {
     void resetForOpen() {
         std::scoped_lock lock(mutex);
         directory.clear();
+        stillFile.clear();
         state         = FrameWriterState::Idle;
         ownsDirectory = false;
         submitted = written = nextFrameIndex = 0;
@@ -219,6 +229,24 @@ bool PngSequenceWriter::open(CompiledExportPlan const& plan) {
     }
 
     std::error_code ec;
+    if (plan.settings.stillFrame) {
+        auto const folder = plan.outputPath.parent_path();
+        if (!folder.empty() && !std::filesystem::exists(folder, ec)) std::filesystem::create_directories(folder, ec);
+        if (ec) {
+            std::scoped_lock lock(mImpl->mutex);
+            mImpl->setFailureLocked(ExportError::DirectoryCreateFailed, "Unable to create the export output directory");
+            return false;
+        }
+        {
+            std::scoped_lock lock(mImpl->mutex);
+            mImpl->directory = folder;
+            mImpl->stillFile = plan.outputPath;
+            mImpl->state     = FrameWriterState::Running;
+        }
+        mImpl->worker = std::thread([impl = mImpl.get()] { impl->workerLoop(); });
+        return true;
+    }
+
     bool const      outputExists = std::filesystem::exists(mImpl->directory, ec);
     if (ec) {
         std::scoped_lock lock(mImpl->mutex);

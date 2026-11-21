@@ -2,6 +2,7 @@
 
 #include "playback/editor/ui/PanelContext.h"
 #include "playback/editor/ui/components/CameraPathOverlay.h"
+#include "playback/editor/ui/components/OverlayPreview.h"
 #include "playback/editor/ui/components/Splitter.h"
 #include "playback/replay/ReplaySession.h"
 
@@ -46,6 +47,9 @@ private:
     CameraPathOverlay mCameraPath;
     bool              mInfoOverlayVisible{true};
     bool              mAutoPreview{true};
+    // Rule-of-thirds guide over the picture; a viewing aid only, never exported.
+    bool              mThirdsVisible{};
+    OverlayPreview    mOverlayPreview;
     // Entity under the cursor when the viewport was right-clicked; the menu acts on it.
     std::optional<replay::ReplaySession::ReplayEntityInfo> mPickedEntity;
 };

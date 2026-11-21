@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "playback/editor/ui/PanelContext.h"
+#include "playback/exporting/ExportTypes.h"
 
 #include <array>
 #include <string>
@@ -22,6 +23,8 @@ public:
     void              setExportEndTick(int tick) { mExportEndTick = tick; }
     // Marks in/out at the playhead, clearing the range back to unset once it covers everything.
     void markExportPoint(bool isIn, int tick, int totalTicks);
+    // The export dialog's folder and quality for one PNG of the frame at `tick`, shaped like the viewport's frame.
+    [[nodiscard]] exporting::ExportSettings stillFrameSettings(int tick, int totalTicks, float frameAspect) const;
 
 private:
     void drawMenus(PanelContext const& ctx);

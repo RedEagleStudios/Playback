@@ -41,6 +41,7 @@ namespace Playback::ReplayEditor::Icons {
 
 // State toggles
 #define ICON_LOCK    "\ue10b" // lock
+#define ICON_UNLOCK  "\ue10c" // lock-open
 #define ICON_MUTE    "\ue1ac" // volume-x
 #define ICON_HIDE    "\ue0bb" // eye-off
 #define ICON_EYE     "\ue0ba" // eye
@@ -71,6 +72,52 @@ namespace Playback::ReplayEditor::Icons {
 #define ICON_CLOCK        "\ue250" // clock-3
 #define ICON_WORLD        "\ue0e8" // globe
 #define ICON_WARNING      "\ue193" // triangle-alert
+
+// Layers and viewport guides
+#define ICON_TITLE      "\ue198" // type
+#define ICON_SHAPE      "\ue4b3" // shapes
+#define ICON_RECTANGLE  "\ue167" // square
+#define ICON_ELLIPSE    "\ue076" // circle
+#define ICON_TRIANGLE   "\ue192" // triangle
+#define ICON_POLYGON    "\ue0f3" // hexagon
+#define ICON_MODEL      "\ue524" // cuboid
+#define ICON_FILM       "\ue0d0" // film
+#define ICON_THIRDS     "\ue0ef" // hash
+#define ICON_STILL      "\ue064" // camera
+
+// Preview page
+#define ICON_HUD         "\ue11d" // monitor
+#define ICON_CHAT        "\ue117" // message-square
+#define ICON_BOSS_BAR    "\ue221" // skull
+#define ICON_HEADING     "\ue384" // heading
+#define ICON_SCOREBOARD  "\ue1d1" // list-ordered
+#define ICON_ACTION_BAR  "\ue1b4" // zap
+#define ICON_HOTBAR      "\ue4ce" // gallery-horizontal
+#define ICON_VOLUME      "\ue1ab" // volume-2
+#define ICON_PAUSE_SOUND "\ue12e" // pause
+#define ICON_SUN         "\ue178" // sun
+#define ICON_SNOWFLAKE   "\ue165" // snowflake
+#define ICON_CLOUD_OFF   "\ue08d" // cloud-off
+#define ICON_FOG         "\ue214" // cloud-fog
+#define ICON_PALETTE     "\ue1dd" // palette
+#define ICON_WEATHER     "\ue08e" // cloud-rain
+#define ICON_FOV         "\ue536" // scan-eye
+#define ICON_GRAPHICS    "\ue29a" // sliders-horizontal
+#define ICON_PACKS       "\ue129" // package
+#define ICON_EXPOSURE    "\ue2b1" // sun-medium
+#define ICON_TEMPERATURE "\ue186" // thermometer
+#define ICON_TINT        "\ue0b4" // droplet
+#define ICON_CONTRAST    "\ue09d" // contrast
+#define ICON_BOLD        "\ue05d" // bold
+#define ICON_ITALIC      "\ue0fb" // italic
+#define ICON_POSITION    "\ue121" // move
+#define ICON_SCALE       "\ue2ec" // scaling
+#define ICON_ROTATE      "\ue149" // rotate-cw
+#define ICON_OPACITY     "\ue59c" // blend
+#define ICON_FONT        "\ue3d9" // case-sensitive
+#define ICON_CHEVRON_LEFT  "\ue06e" // chevron-left
+#define ICON_CHEVRON_RIGHT "\ue06f" // chevron-right
+#define ICON_GRAPH         "\ue60d" // chart-spline
 
 // Track status
 #define ICON_TRACK_ACTIVE "\ue345" // circle-dot

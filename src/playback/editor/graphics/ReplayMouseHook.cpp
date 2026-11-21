@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
+#include "playback/editor/input/FlySpeed.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/exporting/ExportActivity.h"
 #include "playback/runtime/WindowCloseGuard.h"
@@ -485,6 +486,13 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
             bool const down = event.buttonData() != MouseAction::DataUp;
             gLeftMouseDown.store(down, std::memory_order_release);
             if (!down) gReleaseRequested.store(true, std::memory_order_release);
+        }
+        // While flying, the wheel picks the flight speed; it never reaches the game's hotbar.
+        if (action == MouseAction::ActionWheel) {
+            float wheel = static_cast<float>(event.buttonData());
+            if (wheel == 0.0f) wheel = static_cast<float>(event.dy());
+            if (wheel != 0.0f && !blockGameInput) input::stepFlySpeed(wheel > 0.0f ? 1 : -1);
+            event.cancel();
         }
         if (blockGameInput) {
             gReleaseRequested.store(true, std::memory_order_release);

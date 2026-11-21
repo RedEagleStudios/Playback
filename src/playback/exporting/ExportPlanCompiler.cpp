@@ -4,6 +4,8 @@
 
 #include <cctype>
 #include <limits>
+#include <utility>
+#include <vector>
 
 namespace playback::exporting {
 
@@ -108,6 +110,7 @@ constexpr uint64_t MaxFramePixels       = MaxExportPixels;
 std::filesystem::path buildExportOutputPath(ExportSettings const& settings) {
     auto const baseName = outputBaseName(settings.outputName);
     if (settings.format == ExportFormat::Mp4Video) return settings.outputDirectory / utf8Path(baseName + ".mp4");
+    if (settings.stillFrame) return settings.outputDirectory / utf8Path(baseName + ".png");
     // A frame sequence is many files, so it still needs a folder of its own to live in.
     return settings.outputDirectory / utf8Path(baseName);
 }
@@ -139,8 +142,25 @@ std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t renderIndex) c
         return std::nullopt;
     }
 
-    int64_t replayTickNumerator = 0;
-    if (!checkedSignedAdd(replayTickStartNumerator, frameOffset, replayTickNumerator)) return std::nullopt;
+    int64_t timelineTickNumerator = 0;
+    if (!checkedSignedAdd(replayTickStartNumerator, frameOffset, timelineTickNumerator)) return std::nullopt;
+    // The output's clock runs through the kept stretches end to end; the replay time is where that lands in them.
+    int64_t replayTickNumerator = timelineTickNumerator;
+    int64_t remaining           = frameOffset;
+    for (size_t index = 0; index < keptRanges.size(); ++index) {
+        auto const [first, last] = keptRanges[index];
+        int64_t span             = 0;
+        int64_t firstNumerator   = 0;
+        if (!checkedSignedMultiply(last - first, replayTickDenominator, span)
+            || !checkedSignedMultiply(first, replayTickDenominator, firstNumerator)) {
+            return std::nullopt;
+        }
+        if (remaining < span || index + 1 == keptRanges.size()) {
+            if (!checkedSignedAdd(firstNumerator, remaining, replayTickNumerator)) return std::nullopt;
+            break;
+        }
+        remaining -= span;
+    }
     int64_t tickDenominator = replayTickDenominator;
     if (samples > 1) {
         // Sample k of n sits k/n of the way through the open shutter, the first on the frame's own time. Exact over
@@ -148,12 +168,14 @@ std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t renderIndex) c
         int64_t const scale        = static_cast<int64_t>(samples) * 360;
         int64_t       sampleOffset = 0;
         if (!checkedSignedMultiply(replayTickNumerator, scale, replayTickNumerator)
+            || !checkedSignedMultiply(timelineTickNumerator, scale, timelineTickNumerator)
             || !checkedSignedMultiply(
                 replayTickStepNumerator,
                 sample * static_cast<int64_t>(settings.motionBlurShutter),
                 sampleOffset
             )
             || !checkedSignedAdd(replayTickNumerator, sampleOffset, replayTickNumerator)
+            || !checkedSignedAdd(timelineTickNumerator, sampleOffset, timelineTickNumerator)
             || !checkedSignedMultiply(replayTickDenominator, scale, tickDenominator)) {
             return std::nullopt;
         }
@@ -167,6 +189,7 @@ std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t renderIndex) c
     ExportFramePlan result;
     result.replayTickNumerator   = replayTickNumerator;
     result.replayTickDenominator = tickDenominator;
+    result.timelineTickNumerator = timelineTickNumerator;
     result.ticket.frameIndex     = renderIndex;
     result.ticket.ptsNumerator   = ptsNumerator;
     result.ticket.ptsDenominator = settings.frameRate.numerator;
@@ -231,7 +254,28 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     ExportSettings normalized = settings;
     normalized.frameRate      = normalizeFrameRate(normalized.frameRate);
 
-    uint64_t const durationTicks = static_cast<uint64_t>(settings.endTick - settings.startTick);
+    if (settings.stillFrame && settings.format != ExportFormat::PngSequence) {
+        return failure(ExportError::InvalidSettings, "A still frame is written as PNG");
+    }
+
+    // The replay layer's segments are what plays; a cut between two is left out of the output.
+    std::vector<std::pair<int64_t, int64_t>> keptRanges;
+    if (project.worldActor.segments.empty() || settings.stillFrame) {
+        keptRanges.emplace_back(settings.startTick, settings.endTick);
+    } else {
+        for (auto const& segment : project.worldActor.segments) {
+            int64_t const first = std::max<int64_t>(settings.startTick, segment.startTick);
+            int64_t const last  = std::min<int64_t>(settings.endTick, segment.endTick);
+            if (first < last) keptRanges.emplace_back(first, last);
+        }
+    }
+    if (keptRanges.empty()) {
+        return failure(ExportError::InvalidTimeline, "The whole export range is cut out of the replay layer");
+    }
+    // The replay starts the export where the output's first frame is.
+    normalized.startTick = keptRanges.front().first;
+    uint64_t durationTicks = 0;
+    for (auto const& [first, last] : keptRanges) durationTicks += static_cast<uint64_t>(last - first);
     uint64_t       denominator   = 0;
     if (!checkedMultiply(
             static_cast<uint64_t>(ReplayTicksPerSecond),
@@ -255,12 +299,13 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
         || !checkedAdd(frameCount, fractionalFrames, frameCount) || frameCount == 0 || frameCount > MaxExportFrames) {
         return failure(ExportError::InvalidTimeline, "The export timeline produces too many frames");
     }
+    if (settings.stillFrame) frameCount = 1;
     if (frameCount - 1 > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
         return failure(ExportError::InvalidTimeline, "The export frame index is too large");
     }
 
     int64_t replayStartNumerator = 0;
-    if (!checkedSignedMultiply(settings.startTick, normalized.frameRate.numerator, replayStartNumerator)) {
+    if (!checkedSignedMultiply(keptRanges.front().first, normalized.frameRate.numerator, replayStartNumerator)) {
         return failure(ExportError::InvalidTimeline, "The export start tick is too large");
     }
     int64_t replayStepNumerator = 0;
@@ -284,6 +329,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     plan.replayTickStartNumerator = replayStartNumerator;
     plan.replayTickStepNumerator  = replayStepNumerator;
     plan.replayTickDenominator    = plan.settings.frameRate.numerator;
+    plan.keptRanges               = std::move(keptRanges);
     if (!plan.frame(plan.renderFrameCount() - 1)) {
         return failure(ExportError::InvalidTimeline, "The export timeline is too large for its motion blur samples");
     }

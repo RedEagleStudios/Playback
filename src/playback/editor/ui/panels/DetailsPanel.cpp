@@ -3,6 +3,7 @@
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/EasingCurveEditor.h"
 #include "playback/editor/ui/components/EasingPresetPicker.h"
+#include "playback/editor/ui/components/KeyframeControls.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/PropertyControls.h"
 #include "playback/editor/ui/components/Widgets.h"
@@ -11,6 +12,7 @@
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/utils/PathUtils.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -21,6 +23,11 @@
 #include <cmath>
 #include <cstdio>
 #include <utility>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <string_view>
+#include <vector>
 
 namespace playback::editor::ui {
 using namespace playback::state;
@@ -122,8 +129,7 @@ bool vectorInput(
             else ImGui::TextDisabled("%s", labels[axis]);
             ImGui::SetNextItemWidth(-1.0f);
             ImGui::PushID(axis);
-            ImGui::InputFloat("##value", &values[axis], 0.0f, 0.0f, format);
-            edited |= ImGui::IsItemDeactivatedAfterEdit();
+            edited |= widgets::dragFloatOnRelease("##value", &values[axis], 0.0f, 0.0f, format, 0.02f);
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -131,6 +137,38 @@ bool vectorInput(
     ImGui::PopStyleVar(2);
     ImGui::PopID();
     return edited;
+}
+
+std::filesystem::path utf8Path(std::string const& text) {
+    return std::filesystem::path(std::u8string(text.begin(), text.end()));
+}
+
+// A template name as a Windows file name: characters it cannot hold dropped, no trailing dots or spaces.
+std::string templateFileName(std::string_view name) {
+    std::string result;
+    for (char ch : name) {
+        if (static_cast<unsigned char>(ch) < 32 || std::string_view("<>:\"/\\|?*").find(ch) != std::string_view::npos) {
+            continue;
+        }
+        result += ch;
+    }
+    while (!result.empty() && (result.back() == '.' || result.back() == ' ')) result.pop_back();
+    while (!result.empty() && result.front() == ' ') result.erase(result.begin());
+    return result;
+}
+
+// A shader template: Arke's `<pack>.txt` format, one `NAME=value` per line.
+std::map<std::string, std::string> readShaderTemplate(std::filesystem::path const& file) {
+    std::map<std::string, std::string> values;
+    std::ifstream                      in(file, std::ios::binary);
+    std::string                        line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        auto const eq = line.find('=');
+        if (eq == std::string::npos || eq == 0) continue;
+        values.insert_or_assign(line.substr(0, eq), line.substr(eq + 1));
+    }
+    return values;
 }
 
 } // namespace
@@ -223,6 +261,8 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
         subject = "playback.refactorEditor.details.marker"_tr();
     } else if (selection.getAs<state::editing::model::SelectedPoseKey>()) {
         subject = "playback.refactorEditor.details.poseKey"_tr();
+    } else if (auto layer = LayerInspector::subject(ctx); !layer.empty()) {
+        subject = std::move(layer);
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
@@ -234,6 +274,7 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawKeyframe(ctx)) return;
     if (drawMarker(ctx)) return;
     if (drawPoseKey(ctx)) return;
+    if (mLayerInspector.draw(ctx)) return;
     drawOverview(ctx);
 }
 
@@ -314,8 +355,7 @@ bool DetailsPanel::drawWorldActorSegment(PanelContext const& ctx) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.worldActorSegmentMissing"_tr().c_str());
             return true;
         }
-        bool const isFirst = &project->worldActor.segments.front() == segment;
-        bool const isLast  = &project->worldActor.segments.back() == segment;
+        bool const onlySegment = project->worldActor.segments.size() <= 1;
         if (property::beginSection("playback.refactorEditor.details.worldActorSegment"_tr().c_str())) {
             ImGui::TextUnformatted(
                 "playback.refactorEditor.details.range"_tr(formatTick(segment->startTick), formatTick(segment->endTick))
@@ -330,34 +370,32 @@ bool DetailsPanel::drawWorldActorSegment(PanelContext const& ctx) {
             int        endTick    = segment->endTick;
             auto const startLabel = "playback.refactorEditor.details.start"_tr();
             auto const endLabel   = "playback.refactorEditor.details.end"_tr();
-            ImGui::BeginDisabled(isFirst);
-            if (ImGui::InputInt(startLabel.c_str(), &startTick) && ImGui::IsItemDeactivatedAfterEdit()) {
+            if (widgets::dragIntOnRelease(startLabel.c_str(), &startTick, 0, project->totalTicks, "%d", 0.25f)) {
                 EditorAction action{EditorActionType::TrimWorldActor};
                 action.id   = segment->id;
-                action.tick = std::clamp(startTick, 1, endTick - 1);
+                action.tick = std::clamp(startTick, 0, endTick - 1);
                 action.kind = endTick;
                 submit(std::move(action));
             }
-            ImGui::EndDisabled();
-            ImGui::BeginDisabled(isLast);
-            if (ImGui::InputInt(endLabel.c_str(), &endTick) && ImGui::IsItemDeactivatedAfterEdit()) {
+            if (widgets::dragIntOnRelease(endLabel.c_str(), &endTick, 0, project->totalTicks, "%d", 0.25f)) {
                 EditorAction action{EditorActionType::TrimWorldActor};
                 action.id   = segment->id;
                 action.tick = startTick;
                 action.kind = std::clamp(endTick, startTick + 1, project->totalTicks);
                 submit(std::move(action));
             }
-            ImGui::EndDisabled();
             if (property::actionButton("playback.refactorEditor.details.splitAtPlayhead"_tr().c_str())) {
                 EditorAction action{EditorActionType::SplitWorldActor};
                 action.tick = ctx.state.currentTick;
                 submit(std::move(action));
             }
-            if (property::actionButton("playback.refactorEditor.details.rippleDelete"_tr().c_str())) {
-                EditorAction action{EditorActionType::RippleDeleteWorldActorSegment};
+            ImGui::BeginDisabled(onlySegment);
+            if (property::actionButton("playback.refactorEditor.details.cutSegment"_tr().c_str())) {
+                EditorAction action{EditorActionType::DeleteWorldActorSegment};
                 action.id = segment->id;
                 submit(std::move(action));
             }
+            ImGui::EndDisabled();
             ImGui::EndDisabled();
             if (segment->locked) {
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.segmentLocked"_tr().c_str());
@@ -697,8 +735,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
                 ImGui::TableNextColumn();
                 ImGui::SetNextItemWidth(-1.0f);
-                ImGui::InputInt("##tick", &tick, 0, 0);
-                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                if (widgets::dragIntOnRelease("##tick", &tick, 0, ctx.state.totalTicks, "%d", 0.25f)) {
                     EditorAction action{EditorActionType::MoveCameraKeyframe};
                     action.id            = camera->id;
                     action.tick          = originalTick;
@@ -744,53 +781,6 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                         action.position = {rotation[0], rotation[1], rotation[2]};
                         submit(std::move(action));
                     }
-
-                    float fov = key->second.fov;
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextDisabled("FOV");
-                    ImGui::TableNextColumn();
-                    ImGui::SetNextItemWidth(-1.0f);
-                    ImGui::InputFloat("##fov", &fov, 0.0f, 0.0f, "%.2f°");
-                    if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(fov)) {
-                        EditorAction action{EditorActionType::SetKeyframeFov};
-                        action.id    = camera->id;
-                        action.tick  = originalTick;
-                        action.speed = std::clamp(fov, 1.0f, 179.0f);
-                        submit(std::move(action));
-                    }
-
-                    // Strength and frequency go together so one edit is one undo step.
-                    float      shake          = key->second.shake;
-                    float      shakeFrequency = key->second.shakeFrequency;
-                    auto const commitShake    = [&] {
-                        if (!std::isfinite(shake) || !std::isfinite(shakeFrequency)) return;
-                        EditorAction action{EditorActionType::SetKeyframeShake};
-                        action.id             = camera->id;
-                        action.tick           = originalTick;
-                        action.speed          = shake;
-                        action.shakeFrequency = shakeFrequency;
-                        submit(std::move(action));
-                    };
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeStrength"_tr().c_str());
-                    ImGui::TableNextColumn();
-                    ImGui::SetNextItemWidth(-1.0f);
-                    ImGui::InputFloat("##shake", &shake, 0.0f, 0.0f, "%.2f");
-                    if (ImGui::IsItemDeactivatedAfterEdit()) commitShake();
-                    widgets::itemTooltip("playback.refactorEditor.details.shakeStrengthHint"_tr().c_str());
-
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeFrequency"_tr().c_str());
-                    ImGui::TableNextColumn();
-                    ImGui::SetNextItemWidth(-1.0f);
-                    ImGui::InputFloat("##shake-frequency", &shakeFrequency, 0.0f, 0.0f, "%.2f Hz");
-                    if (ImGui::IsItemDeactivatedAfterEdit()) commitShake();
 
                     int interpolation = static_cast<int>(key->second.interpolationType);
                     ImGui::TableNextRow();
@@ -951,8 +941,7 @@ bool DetailsPanel::drawMarker(PanelContext const& ctx) {
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
                 ImGui::TableNextColumn();
                 ImGui::SetNextItemWidth(-1.0f);
-                ImGui::InputInt("##marker-tick", &tick, 0, 0);
-                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                if (widgets::dragIntOnRelease("##marker-tick", &tick, 0, ctx.state.totalTicks, "%d", 0.25f)) {
                     tick = std::clamp(tick, 0, ctx.state.totalTicks);
                     if (tick != marker->tick) {
                         EditorAction action{EditorActionType::MoveMarker};
@@ -1081,53 +1070,70 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
     // An export renders what these say, so they stay put while one is running.
     ImGui::BeginDisabled(exporting::isExportActive(ctx.state.exportStatus.state));
 
-    if (property::beginSection("playback.refactorEditor.inspector.hud"_tr().c_str())) {
+    if (property::beginSection((ICON_HUD "  " + "playback.refactorEditor.inspector.hud"_tr()).c_str())) {
         struct Toggle {
             visuals::HudElement element;
+            char const*         icon;
             std::string         label;
         };
         std::array const toggles{
-            Toggle{visuals::HudElement::Chat,       "playback.refactorEditor.inspector.hudChat"_tr()      },
-            Toggle{visuals::HudElement::BossBar,    "playback.refactorEditor.inspector.hudBossBar"_tr()   },
-            Toggle{visuals::HudElement::Title,      "playback.refactorEditor.inspector.hudTitle"_tr()     },
-            Toggle{visuals::HudElement::Scoreboard, "playback.refactorEditor.inspector.hudScoreboard"_tr()},
-            Toggle{visuals::HudElement::ActionBar,  "playback.refactorEditor.inspector.hudActionBar"_tr() },
-            Toggle{visuals::HudElement::Hotbar,     "playback.refactorEditor.inspector.hudHotbar"_tr()    },
+            Toggle{visuals::HudElement::Chat,       ICON_CHAT,       "playback.refactorEditor.inspector.hudChat"_tr()      },
+            Toggle{visuals::HudElement::BossBar,    ICON_BOSS_BAR,   "playback.refactorEditor.inspector.hudBossBar"_tr()   },
+            Toggle{visuals::HudElement::Title,      ICON_HEADING,    "playback.refactorEditor.inspector.hudTitle"_tr()     },
+            Toggle{visuals::HudElement::Scoreboard, ICON_SCOREBOARD, "playback.refactorEditor.inspector.hudScoreboard"_tr()},
+            Toggle{visuals::HudElement::ActionBar,  ICON_ACTION_BAR, "playback.refactorEditor.inspector.hudActionBar"_tr() },
+            Toggle{visuals::HudElement::Hotbar,     ICON_HOTBAR,     "playback.refactorEditor.inspector.hudHotbar"_tr()    },
         };
         for (auto const& toggle : toggles) {
             bool shown = ctx.commands.isHudElementShown(toggle.element);
             ImGui::PushID(static_cast<int>(toggle.element));
-            if (ImGui::Checkbox((toggle.label + "##set-hud").c_str(), &shown))
+            std::string const tooltip = toggle.element == visuals::HudElement::Hotbar
+                                          ? "playback.refactorEditor.inspector.hudHotbarHint"_tr()
+                                          : std::string{};
+            if (widgets::toggleRow(
+                    "##set-hud",
+                    toggle.icon,
+                    toggle.label.c_str(),
+                    &shown,
+                    tooltip.empty() ? nullptr : tooltip.c_str()
+                )) {
                 ctx.commands.setHudElementShown(toggle.element, shown);
+            }
             ImGui::PopID();
-            if (toggle.element == visuals::HudElement::Hotbar)
-                widgets::itemTooltip("playback.refactorEditor.inspector.hudHotbarHint"_tr().c_str());
         }
         hint("playback.refactorEditor.inspector.hudHint"_tr());
         property::endSection();
     }
 
-    if (property::beginSection("playback.refactorEditor.inspector.previewAudio"_tr().c_str())) {
+    if (property::beginSection((ICON_VOLUME "  " + "playback.refactorEditor.inspector.previewAudio"_tr()).c_str())) {
         bool muted = ctx.commands.isPreviewAudioMuted();
-        if (ImGui::Checkbox(("playback.refactorEditor.inspector.previewMute"_tr() + "##set-mute").c_str(), &muted))
+        if (widgets::toggleRow(
+                "##set-mute",
+                ICON_MUTE,
+                "playback.refactorEditor.inspector.previewMute"_tr().c_str(),
+                &muted
+            )) {
             ctx.commands.setPreviewAudioMuted(muted);
+        }
 
         ImGui::BeginDisabled(muted);
-        ImGui::TextUnformatted("playback.refactorEditor.inspector.previewVolume"_tr().c_str());
+        widgets::fieldLabel(ICON_VOLUME, "playback.refactorEditor.inspector.previewVolume"_tr().c_str());
         float percent = ctx.commands.previewAudioVolume() * 100.0f;
-        ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::SliderFloat("##set-preview-volume", &percent, 0.0f, 100.0f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp))
+        if (widgets::dragFloat("##set-preview-volume", &percent, 0.0f, 100.0f, "%.0f%%"))
             ctx.commands.setPreviewAudioVolume(percent / 100.0f, false);
         if (ImGui::IsItemDeactivatedAfterEdit()) ctx.commands.setPreviewAudioVolume(percent / 100.0f, true);
         ImGui::EndDisabled();
 
         bool silent = ctx.commands.isPreviewSilentWhilePaused();
-        if (ImGui::Checkbox(
-                ("playback.refactorEditor.inspector.previewSilentPaused"_tr() + "##set-silent-paused").c_str(),
-                &silent
-            ))
+        if (widgets::toggleRow(
+                "##set-silent-paused",
+                ICON_PAUSE_SOUND,
+                "playback.refactorEditor.inspector.previewSilentPaused"_tr().c_str(),
+                &silent,
+                "playback.refactorEditor.inspector.previewSilentPausedHint"_tr().c_str()
+            )) {
             ctx.commands.setPreviewSilentWhilePaused(silent);
-        widgets::itemTooltip("playback.refactorEditor.inspector.previewSilentPausedHint"_tr().c_str());
+        }
         hint("playback.refactorEditor.inspector.previewAudioHint"_tr());
         property::endSection();
     }
@@ -1215,7 +1221,7 @@ void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {
 void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     using editing::model::WorldSettings;
     if (!ctx.state.project) return;
-    if (!property::beginSection("playback.refactorEditor.inspector.world"_tr().c_str())) return;
+    if (!property::beginSection((ICON_WORLD "  " + "playback.refactorEditor.inspector.world"_tr()).c_str())) return;
 
     auto const submit = [&ctx](EditorActionType type, std::optional<WorldSettings> settings) {
         EditorAction action{type};
@@ -1233,97 +1239,137 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
         mWorldDraft = edited;
         submit(EditorActionType::PreviewWorldSettings, edited);
     };
+    auto const toggle = [&](char const*         id,
+                            char const*         icon,
+                            std::string const&  label,
+                            bool WorldSettings::* field,
+                            std::string const&  tooltip = {}) {
+        if (widgets::toggleRow(id, icon, label.c_str(), &(world.*field), tooltip.empty() ? nullptr : tooltip.c_str())) {
+            commit(world);
+        }
+    };
 
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldOverrideTime"_tr() + "##set-override-time").c_str(),
-            &world.overrideTime
-        ))
-        commit(world);
+    toggle(
+        "##set-override-time",
+        ICON_SUN,
+        "playback.refactorEditor.inspector.worldOverrideTime"_tr(),
+        &WorldSettings::overrideTime
+    );
+
+    int const tick = ctx.state.currentTick;
+    // A keyable World number: its diamond keys it at the playhead; an edit previews while held and commits on release.
+    auto const keyed = [&](keyframes::RowResult const& result) {
+        if (result.seek) ctx.commands.seekTo(*result.seek);
+        if (!result.changed) return;
+        if (ImGui::IsAnyItemActive()) drag(true, world);
+        else commit(world);
+    };
 
     ImGui::BeginDisabled(!world.overrideTime);
-    int timeOfDay = world.timeOfDay;
     // Minecraft's day starts at 06:00: 1000 ticks are one hour.
-    int const  minutes = (timeOfDay * 60 / 1000 + 6 * 60) % (24 * 60);
+    float      timeOfDay = static_cast<float>(world.timeOfDay);
+    int const  shownTime = static_cast<int>(editing::model::worldAt(world, tick).timeOfDay);
+    int const  minutes   = (shownTime * 60 / 1000 + 6 * 60) % (24 * 60);
     std::array clock{'0', '0', ':', '0', '0', '\0'};
     std::snprintf(clock.data(), clock.size(), "%02d:%02d", minutes / 60, minutes % 60);
-    ImGui::SetNextItemWidth(-1.0f);
-    bool changed = ImGui::SliderInt(
-        "##set-time-of-day",
-        &timeOfDay,
-        0,
-        WorldSettings::TicksPerDay - 1,
-        clock.data(),
-        ImGuiSliderFlags_AlwaysClamp
+    auto const timeResult = keyframes::propertyRow(
+        "time-of-day",
+        ICON_SUN,
+        "playback.refactorEditor.inspector.worldTimeOfDay"_tr(clock.data()),
+        world.channels,
+        editing::model::WorldTimeOfDay,
+        timeOfDay,
+        tick,
+        0.0f,
+        static_cast<float>(WorldSettings::TicksPerDay - 1),
+        "%.0f"
     );
-    auto edited      = world;
-    edited.timeOfDay = timeOfDay;
-    drag(changed, edited);
+    world.timeOfDay = static_cast<int>(std::lround(timeOfDay));
+    keyed(timeResult);
 
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldFreezeTime"_tr() + "##set-freeze-time").c_str(),
-            &world.freezeTime
-        ))
-        commit(world);
-    widgets::itemTooltip("playback.refactorEditor.inspector.worldFreezeTimeHint"_tr().c_str());
+    toggle(
+        "##set-freeze-time",
+        ICON_SNOWFLAKE,
+        "playback.refactorEditor.inspector.worldFreezeTime"_tr(),
+        &WorldSettings::freezeTime,
+        "playback.refactorEditor.inspector.worldFreezeTimeHint"_tr()
+    );
     ImGui::EndDisabled();
 
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldHideClouds"_tr() + "##set-hide-clouds").c_str(),
-            &world.hideClouds
-        ))
-        commit(world);
+    toggle(
+        "##set-hide-clouds",
+        ICON_CLOUD_OFF,
+        "playback.refactorEditor.inspector.worldHideClouds"_tr(),
+        &WorldSettings::hideClouds
+    );
 
     property::separator();
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldOverrideFog"_tr() + "##set-override-fog").c_str(),
-            &world.overrideFog
-        ))
-        commit(world);
+    toggle(
+        "##set-override-fog",
+        ICON_FOG,
+        "playback.refactorEditor.inspector.worldOverrideFog"_tr(),
+        &WorldSettings::overrideFog
+    );
     ImGui::BeginDisabled(!world.overrideFog);
     // Shown in percent of the render distance; stored as fractions.
     float const maxPercent = WorldSettings::MaxFogDistance * 100.0f;
-    float       start      = world.fogStart * 100.0f;
-    float       end        = world.fogEnd * 100.0f;
-    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.worldFogStart"_tr().c_str());
-    ImGui::SetNextItemWidth(-1.0f);
-    changed = ImGui::SliderFloat("##set-fog-start", &start, 0.0f, maxPercent, "%.0f%%", ImGuiSliderFlags_AlwaysClamp);
+    keyed(keyframes::propertyRow(
+        "fog-start",
+        nullptr,
+        "playback.refactorEditor.inspector.worldFogStart"_tr(),
+        world.channels,
+        "fogStart",
+        world.fogStart,
+        tick,
+        0.0f,
+        maxPercent,
+        "%.0f%%",
+        100.0f
+    ));
     widgets::itemTooltip("playback.refactorEditor.inspector.worldFogDistanceHint"_tr().c_str());
-    edited          = world;
-    edited.fogStart = start / 100.0f;
-    edited.fogEnd   = std::max(edited.fogEnd, edited.fogStart);
-    drag(changed, edited);
-    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.worldFogEnd"_tr().c_str());
-    ImGui::SetNextItemWidth(-1.0f);
-    changed = ImGui::SliderFloat("##set-fog-end", &end, 0.0f, maxPercent, "%.0f%%", ImGuiSliderFlags_AlwaysClamp);
+    keyed(keyframes::propertyRow(
+        "fog-end",
+        nullptr,
+        "playback.refactorEditor.inspector.worldFogEnd"_tr(),
+        world.channels,
+        "fogEnd",
+        world.fogEnd,
+        tick,
+        0.0f,
+        maxPercent,
+        "%.0f%%",
+        100.0f
+    ));
     widgets::itemTooltip("playback.refactorEditor.inspector.worldFogDistanceHint"_tr().c_str());
-    edited          = world;
-    edited.fogEnd   = end / 100.0f;
-    edited.fogStart = std::min(edited.fogStart, edited.fogEnd);
-    drag(changed, edited);
 
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldOverrideFogColor"_tr() + "##set-override-fog-color").c_str(),
-            &world.overrideFogColor
-        ))
-        commit(world);
-    widgets::itemTooltip("playback.refactorEditor.inspector.worldFogColorHint"_tr().c_str());
+    toggle(
+        "##set-override-fog-color",
+        ICON_PALETTE,
+        "playback.refactorEditor.inspector.worldOverrideFogColor"_tr(),
+        &WorldSettings::overrideFogColor,
+        "playback.refactorEditor.inspector.worldFogColorHint"_tr()
+    );
     ImGui::BeginDisabled(!world.overrideFogColor);
-    auto color = world.fogColor;
-    ImGui::SetNextItemWidth(-1.0f);
-    changed = ImGui::ColorEdit3("##set-fog-color", color.data(), ImGuiColorEditFlags_Float);
-    edited          = world;
-    edited.fogColor = color;
-    drag(changed, edited);
+    keyed(keyframes::colorRow(
+        "fog-color",
+        nullptr,
+        "playback.refactorEditor.inspector.worldFogColor"_tr(),
+        world.channels,
+        "fogColor",
+        world.fogColor,
+        tick
+    ));
     ImGui::EndDisabled();
 
     ImGui::EndDisabled();
 
     property::separator();
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldOverrideWeather"_tr() + "##set-override-weather").c_str(),
-            &world.overrideWeather
-        ))
-        commit(world);
+    toggle(
+        "##set-override-weather",
+        ICON_WEATHER,
+        "playback.refactorEditor.inspector.worldOverrideWeather"_tr(),
+        &WorldSettings::overrideWeather
+    );
     ImGui::BeginDisabled(!world.overrideWeather);
     // Indexed by WeatherStyle.
     std::array const weatherStyles{
@@ -1346,34 +1392,35 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     ImGui::EndDisabled();
 
     property::separator();
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldOverrideFov"_tr() + "##set-override-fov").c_str(),
-            &world.overrideFov
-        ))
-        commit(world);
-    widgets::itemTooltip("playback.refactorEditor.inspector.worldFovHint"_tr().c_str());
+    toggle(
+        "##set-override-fov",
+        ICON_FOV,
+        "playback.refactorEditor.inspector.worldOverrideFov"_tr(),
+        &WorldSettings::overrideFov,
+        "playback.refactorEditor.inspector.worldFovHint"_tr()
+    );
     ImGui::BeginDisabled(!world.overrideFov);
-    float fov = world.fov;
-    ImGui::SetNextItemWidth(-1.0f);
-    changed = ImGui::SliderFloat(
-        "##set-fov",
-        &fov,
+    keyed(keyframes::propertyRow(
+        "fov",
+        nullptr,
+        "playback.refactorEditor.details.fov"_tr(),
+        world.channels,
+        "fov",
+        world.fov,
+        tick,
         WorldSettings::MinFov,
         WorldSettings::MaxFov,
-        "%.0f°",
-        ImGuiSliderFlags_AlwaysClamp
-    );
-    edited     = world;
-    edited.fov = fov;
-    drag(changed, edited);
+        "%.0f°"
+    ));
     ImGui::EndDisabled();
 
     property::separator();
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldOverrideGraphics"_tr() + "##set-override-graphics").c_str(),
-            &world.overrideGraphics
-        ))
-        commit(world);
+    toggle(
+        "##set-override-graphics",
+        ICON_GRAPHICS,
+        "playback.refactorEditor.inspector.worldOverrideGraphics"_tr(),
+        &WorldSettings::overrideGraphics
+    );
     ImGui::BeginDisabled(!world.overrideGraphics);
     // Indexed by GraphicsStyle.
     std::array const graphicsStyles{
@@ -1396,11 +1443,12 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     ImGui::EndDisabled();
 
     property::separator();
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldOverrideGlobalPacks"_tr() + "##set-override-global-packs").c_str(),
-            &world.overrideGlobalPacks
-        ))
-        commit(world);
+    toggle(
+        "##set-override-global-packs",
+        ICON_PACKS,
+        "playback.refactorEditor.inspector.worldOverrideGlobalPacks"_tr(),
+        &WorldSettings::overrideGlobalPacks
+    );
     ImGui::BeginDisabled(!world.overrideGlobalPacks);
     {
         auto const& installed   = ctx.state.installedGlobalPacks;
@@ -1481,28 +1529,28 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     ImGui::PopTextWrapPos();
 
     property::separator();
-    if (ImGui::Checkbox(
-            ("playback.refactorEditor.inspector.worldOverrideColor"_tr() + "##set-override-color").c_str(),
-            &world.overrideColor
-        ))
-        commit(world);
+    toggle(
+        "##set-override-color",
+        ICON_CONTRAST,
+        "playback.refactorEditor.inspector.worldOverrideColor"_tr(),
+        &WorldSettings::overrideColor
+    );
     ImGui::BeginDisabled(!world.overrideColor);
     auto const colorSlider = [&](std::string const& label,
+                                 char const*        icon,
                                  char const*        id,
                                  float WorldSettings::* field,
                                  float                  low,
                                  float                  high,
                                  char const*            format) {
-        ImGui::TextDisabled("%s", label.c_str());
-        ImGui::SetNextItemWidth(-1.0f);
-        float      value   = world.*field;
-        bool const changed = ImGui::SliderFloat(id, &value, low, high, format, ImGuiSliderFlags_AlwaysClamp);
-        auto       edited  = world;
-        edited.*field      = value;
-        drag(changed, edited);
+        char const* name = field == &WorldSettings::exposure      ? "exposure"
+                         : field == &WorldSettings::temperature   ? "temperature"
+                                                                  : "tint";
+        keyed(keyframes::propertyRow(id, icon, label, world.channels, name, world.*field, tick, low, high, format));
     };
     colorSlider(
         "playback.refactorEditor.inspector.worldExposure"_tr(),
+        ICON_EXPOSURE,
         "##set-exposure",
         &WorldSettings::exposure,
         -WorldSettings::MaxExposure,
@@ -1511,6 +1559,7 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     );
     colorSlider(
         "playback.refactorEditor.inspector.worldTemperature"_tr(),
+        ICON_TEMPERATURE,
         "##set-temperature",
         &WorldSettings::temperature,
         -1.0f,
@@ -1519,6 +1568,7 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
     );
     colorSlider(
         "playback.refactorEditor.inspector.worldTint"_tr(),
+        ICON_TINT,
         "##set-tint",
         &WorldSettings::tint,
         -1.0f,
@@ -1617,13 +1667,8 @@ bool DetailsPanel::drawPoseKey(PanelContext const& ctx) {
 
     property::separator();
     int tick = key.tick;
-    if (ImGui::InputInt(
-            "playback.refactorEditor.details.poseTick"_tr().c_str(),
-            &tick,
-            1,
-            20,
-            ImGuiInputTextFlags_EnterReturnsTrue
-        )) {
+    widgets::fieldLabel(nullptr, "playback.refactorEditor.details.poseTick"_tr().c_str());
+    if (widgets::dragIntOnRelease("##pose-tick", &tick, 0, ctx.state.totalTicks, "%d", 0.25f)) {
         commit([&](PoseKey& edited) { edited.tick = std::clamp(tick, 0, ctx.state.totalTicks); });
     }
     if (property::actionButton("playback.refactorEditor.details.poseMoveToPlayhead"_tr().c_str())) {
@@ -1662,7 +1707,7 @@ void DetailsPanel::drawFollowSection(PanelContext const& ctx, state::editing::mo
         [&](std::string const& label, char const* id, float& value, float low, float high, char const* format) {
             ImGui::TextDisabled("%s", label.c_str());
             ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::SliderFloat(id, &value, low, high, format, ImGuiSliderFlags_AlwaysClamp)) {
+            if (widgets::dragFloat(id, &value, low, high, format)) {
                 mFollowDraft = {camera.id, follow};
             }
         };
@@ -1771,65 +1816,125 @@ void DetailsPanel::drawFollowSection(PanelContext const& ctx, state::editing::mo
 
 void DetailsPanel::drawShakeSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera) {
     using editing::model::ShakeSettings;
-    if (!property::beginSection("playback.refactorEditor.details.shake"_tr().c_str())) return;
+    namespace Property = editing::model::CameraProperty;
+    if (!property::beginSection((ICON_GRAPH "  " + "playback.refactorEditor.details.lensAndShake"_tr()).c_str())) return;
 
-    bool const    draft  = mShakeDraft && mShakeDraft->first == camera.id;
-    ShakeSettings shake  = draft ? mShakeDraft->second : camera.shake;
-    auto const    commit = [&](ShakeSettings const& edited) {
-        mShakeDraft.reset();
-        EditorAction action{EditorActionType::SetCameraShake};
-        action.id            = camera.id;
-        action.shakeSettings = edited;
-        ctx.submitAction(std::move(action));
+    bool const draft      = mCameraDraft && mCameraDraft->first == camera.id;
+    auto       properties = draft ? mCameraDraft->second : editing::model::cameraProperties(camera);
+    auto const before     = properties;
+    int const  tick       = ctx.state.currentTick;
+    bool       clicked    = false;
+    auto const row = [&](char const* id, char const* icon, std::string const& label, char const* name, float& value,
+                         float low, float high, char const* format) {
+        auto const result =
+            keyframes::propertyRow(id, icon, label, properties.channels, name, value, tick, low, high, format);
+        if (result.seek) ctx.commands.seekTo(*result.seek);
+        // A diamond or arrow is a click, committed at once; a held field previews until it is let go.
+        if (result.changed && !ImGui::IsAnyItemActive()) clicked = true;
     };
-    // A slider keeps its value here while dragged and becomes one undo step once no control is active any more.
-    auto const slider =
-        [&](std::string const& label, char const* id, float& value, float high, char const* format) {
-            ImGui::TextDisabled("%s", label.c_str());
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::SliderFloat(id, &value, 0.0f, high, format, ImGuiSliderFlags_AlwaysClamp)) {
-                mShakeDraft = {camera.id, shake};
-            }
-        };
 
     ImGui::BeginDisabled(camera.locked);
+    row("fov", ICON_FOV, "playback.refactorEditor.details.fov"_tr(), Property::Fov, properties.fov, 1.0f, 179.0f, "%.1f°");
+
+    // Keys the whole shake at the playhead in one click, as it is now.
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shake"_tr().c_str());
+    ImGui::SameLine();
+    auto const shakeNames = {
+        Property::ShakeStrength,
+        Property::ShakeFrequency,
+        Property::ShakePosition,
+        Property::ShakeRotation,
+        Property::ShakeRoll,
+    };
+    bool const shakeKeyedHere = std::ranges::all_of(shakeNames, [&](char const* name) {
+        auto const channel = properties.channels.find(name);
+        return channel != properties.channels.end() && channel->second.contains(tick);
+    });
+    bool const shakeKeyed = std::ranges::any_of(shakeNames, [&](char const* name) {
+        return editing::model::hasKeys(properties.channels, name);
+    });
+    if (keyframes::diamondButton(
+            "##key-shake",
+            shakeKeyedHere,
+            shakeKeyed,
+            "playback.refactorEditor.details.keyShake"_tr().c_str()
+        )) {
+        auto probe = camera;
+        editing::model::setCameraProperties(probe, properties);
+        keyframes::toggleKeys(properties.channels, shakeNames, tick, [&](char const* name) {
+            return editing::model::cameraPropertyAt(probe, name, tick);
+        });
+        clicked = true;
+    }
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeHint"_tr().c_str());
     ImGui::PopTextWrapPos();
-    slider(
+    row("strength",
+        ICON_ACTION_BAR,
+        "playback.refactorEditor.details.shakeStrength"_tr(),
+        Property::ShakeStrength,
+        properties.shakeStrength,
+        0.0f,
+        ShakeSettings::MaxStrength,
+        "%.2f");
+    row("frequency",
+        ICON_GRAPH,
+        "playback.refactorEditor.details.shakeFrequency"_tr(),
+        Property::ShakeFrequency,
+        properties.shakeFrequency,
+        ShakeSettings::MinFrequency,
+        ShakeSettings::MaxFrequency,
+        "%.2f Hz");
+    row("position",
+        ICON_POSITION,
         "playback.refactorEditor.details.shakePosition"_tr(),
-        "##shake-position",
-        shake.positionAmount,
+        Property::ShakePosition,
+        properties.shake.positionAmount,
+        0.0f,
         ShakeSettings::MaxPositionAmount,
-        "%.2f"
-    );
-    slider(
+        "%.2f");
+    row("rotation",
+        ICON_ROTATE,
         "playback.refactorEditor.details.shakeRotation"_tr(),
-        "##shake-rotation",
-        shake.rotationAmount,
+        Property::ShakeRotation,
+        properties.shake.rotationAmount,
+        0.0f,
         ShakeSettings::MaxRotationAmount,
-        "%.1f°"
-    );
-    slider(
+        "%.1f°");
+    row("roll",
+        ICON_ROTATE,
         "playback.refactorEditor.details.shakeRoll"_tr(),
-        "##shake-roll",
-        shake.rollAmount,
+        Property::ShakeRoll,
+        properties.shake.rollAmount,
+        0.0f,
         ShakeSettings::MaxRotationAmount,
-        "%.1f°"
-    );
+        "%.1f°");
 
     ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeSeed"_tr().c_str());
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputScalar("##shake-seed", ImGuiDataType_U32, &shake.seed);
-    if (ImGui::IsItemActive()) mShakeDraft = {camera.id, shake};
+    ImGui::InputScalar("##shake-seed", ImGuiDataType_U32, &properties.shake.seed);
     widgets::itemTooltip("playback.refactorEditor.details.shakeSeedHint"_tr().c_str());
     if (property::actionButton("playback.refactorEditor.details.shakeNewSeed"_tr().c_str())) {
-        shake.seed = editing::model::randomShakeSeed();
-        commit(shake);
+        properties.shake.seed = editing::model::randomShakeSeed();
+        clicked               = true;
     }
     ImGui::EndDisabled();
 
-    if (mShakeDraft && mShakeDraft->first == camera.id && !ImGui::IsAnyItemActive()) commit(mShakeDraft->second);
+    auto const submit = [&](EditorActionType type, std::optional<editing::model::CameraProperties> edited) {
+        EditorAction action{type};
+        action.id               = camera.id;
+        action.cameraProperties = std::move(edited);
+        ctx.submitAction(std::move(action));
+    };
+    if (!(properties == before)) {
+        mCameraDraft = std::pair{camera.id, properties};
+        submit(EditorActionType::PreviewCameraProperties, properties);
+    }
+    // A click, or a field let go, becomes one undo step.
+    if (mCameraDraft && mCameraDraft->first == camera.id && (clicked || !ImGui::IsAnyItemActive())) {
+        submit(EditorActionType::SetCameraProperties, mCameraDraft->second);
+        mCameraDraft.reset();
+    }
     property::endSection();
 }
 
@@ -1851,13 +1956,12 @@ void DetailsPanel::drawOptiPistonSection() {
     // Held locally while dragging so the config is written once, on release.
     float duration = mPistonDurationDraft.value_or(piston->durationTicks);
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::SliderFloat(
+    widgets::dragFloat(
         "##set-piston-duration",
         &duration,
         piston->minDurationTicks,
         piston->maxDurationTicks,
-        "%.2f gt",
-        ImGuiSliderFlags_AlwaysClamp
+        "%.2f gt"
     );
     if (ImGui::IsItemActive()) mPistonDurationDraft = duration;
     if (ImGui::IsItemDeactivatedAfterEdit()) integration::setOptiPistonDuration(duration);
@@ -1887,6 +1991,7 @@ void DetailsPanel::drawShaderSection(PanelContext const& ctx) {
         action.worldSettings = std::move(edited);
         ctx.submitAction(std::move(action));
     }
+    drawShaderTemplates(ctx, *pack, packName, projectValues);
     drawShaderScreen(ctx, *pack, "", projectValues, 0);
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.shaderHint"_tr().c_str());
@@ -1955,7 +2060,7 @@ void DetailsPanel::drawShaderScreen(
                 std::string format;
                 for (char ch : shown) format += ch == '%' ? std::string("%%") : std::string(1, ch);
                 int const last = static_cast<int>(option->values.size()) - 1;
-                if (ImGui::SliderInt("##value", &index, 0, last, format.c_str(), ImGuiSliderFlags_AlwaysClamp)) {
+                if (widgets::dragInt("##value", &index, 0, last, format.c_str())) {
                     mShaderSliderDraft = {entry, index};
                 }
                 if (ImGui::IsItemDeactivated()) {
@@ -1984,6 +2089,95 @@ void DetailsPanel::drawShaderScreen(
         }
         ImGui::PopID();
     }
+}
+
+void DetailsPanel::drawShaderTemplates(
+    PanelContext const&                       ctx,
+    integration::ShaderPackInfo const&        pack,
+    std::string const&                        packName,
+    std::map<std::string, std::string> const& projectValues
+) {
+    namespace fs     = std::filesystem;
+    auto const  dir  = utils::PathUtils::getShaderTemplatesDir() / utf8Path(packName);
+    auto const& user = ctx.commands.userShaderOptions();
+    // The user's value for an option, or the pack's default when Arke has none saved.
+    auto const userValue = [&](std::string const& name, integration::ShaderOption const& option) {
+        auto const found = user.find(name);
+        return found != user.end() ? found->second : option.defaultValue;
+    };
+
+    ImGui::SetNextItemWidth(-1.0f);
+    if (widgets::beginCombo(
+            "##shader-template",
+            "playback.refactorEditor.inspector.shaderTemplateSelect"_tr().c_str()
+        )) {
+        std::vector<fs::path> files;
+        std::error_code       ec;
+        for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+            if (it->is_regular_file(ec) && it->path().extension() == ".txt") files.push_back(it->path());
+        }
+        std::ranges::sort(files);
+        if (files.empty()) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.shaderTemplateNone"_tr().c_str());
+        }
+        for (auto const& file : files) {
+            auto const stem = file.stem().u8string();
+            if (!ImGui::Selectable(std::string(stem.begin(), stem.end()).c_str())) continue;
+            // Only values that differ from the user's own are the project's, as Use my Arke settings leaves them.
+            std::map<std::string, std::string> values;
+            for (auto const& [name, value] : readShaderTemplate(file)) {
+                auto const* option = pack.option(name);
+                if (option && value != userValue(name, *option)) values.insert_or_assign(name, value);
+            }
+            auto edited = ctx.state.project->world;
+            if (values.empty()) edited.shaderOptions.erase(packName);
+            else edited.shaderOptions.insert_or_assign(packName, std::move(values));
+            EditorAction action{EditorActionType::SetWorldSettings};
+            action.worldSettings = std::move(edited);
+            ctx.submitAction(std::move(action));
+        }
+        widgets::endCombo();
+    }
+
+    auto const title = "playback.refactorEditor.inspector.shaderTemplateCreate"_tr() + "###shader-template-create";
+    if (property::actionButton("playback.refactorEditor.inspector.shaderTemplateCreate"_tr().c_str())) {
+        mShaderTemplateName = {};
+        ImGui::OpenPopup(title.c_str());
+    }
+    if (!ImGui::BeginPopupModal(title.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    ImGui::TextUnformatted("playback.refactorEditor.inspector.shaderTemplateName"_tr().c_str());
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(320.0f);
+    bool const entered = ImGui::InputText(
+        "##name",
+        mShaderTemplateName.data(),
+        mShaderTemplateName.size(),
+        ImGuiInputTextFlags_EnterReturnsTrue
+    );
+    auto const      name = templateFileName(mShaderTemplateName.data());
+    std::error_code ec;
+    if (!name.empty() && fs::exists(dir / utf8Path(name + ".txt"), ec)) {
+        ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.shaderTemplateOverwrite"_tr().c_str());
+    }
+    ImGui::BeginDisabled(name.empty());
+    bool const ok = ImGui::Button("playback.refactorEditor.inspector.shaderTemplateOk"_tr().c_str()) || entered;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("playback.refactorEditor.inspector.shaderTemplateCancel"_tr().c_str())) {
+        ImGui::CloseCurrentPopup();
+    }
+    if (ok && !name.empty()) {
+        // The values in effect: the user's own with the project's over them, for every option the pack declares.
+        std::string text;
+        for (auto const& [option, info] : pack.options) {
+            auto const ours = projectValues.find(option);
+            text += option + "=" + (ours != projectValues.end() ? ours->second : userValue(option, info)) + "\n";
+        }
+        fs::create_directories(dir, ec);
+        std::ofstream(dir / utf8Path(name + ".txt"), std::ios::binary | std::ios::trunc) << text;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 } // namespace playback::editor::ui

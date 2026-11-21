@@ -1,10 +1,12 @@
 ﻿#pragma once
 
 #include "playback/exporting/ExportTypes.h"
+#include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/CameraKeyframe.h"
 #include "playback/state/editing/models/FollowSettings.h"
 #include "playback/state/editing/models/MathTypes.h"
 #include "playback/state/editing/models/PoseClip.h"
+#include "playback/state/editing/models/OverlayItem.h"
 #include "playback/state/editing/models/ShakeSettings.h"
 #include "playback/state/editing/models/WorldSettings.h"
 
@@ -48,7 +50,10 @@ enum class EditorActionType {
     AddFreeCamera,
     SplitWorldActor,
     TrimWorldActor,
-    RippleDeleteWorldActorSegment,
+    // Cuts the segment (id) out of the replay layer: playback and export jump over the gap it leaves.
+    DeleteWorldActorSegment,
+    // Locks (value) every replay layer segment.
+    SetWorldActorLocked,
     AddCameraKeyframe,
     // Writes the live camera into the key at tick, adding it if missing. A person track key also takes the player
     // the view follows, when it follows one.
@@ -58,15 +63,15 @@ enum class EditorActionType {
     SetKeyframeInterpolation,
     SetKeyframePosition,
     SetKeyframeRotation,
-    SetKeyframeFov,
     // A person track key's subject in secondaryId; empty is the recorder.
     SetKeyframeSubject,
     SetCameraEnabled,
     SetCameraLocked,
     SetCameraFollow,
-    // A keyframe track key's shake strength in speed and, when set, its frequency in shakeFrequency.
-    SetKeyframeShake,
-    SetCameraShake,
+    // A keyframe track's FOV and shake properties and their keys (cameraProperties), one undo step.
+    SetCameraProperties,
+    // While a camera property is dragged: shown live, not an undo step (id, cameraProperties; none ends it).
+    PreviewCameraProperties,
     RenameCamera,
     ClearCameraKeyframes,
     DeleteCamera,
@@ -89,6 +94,10 @@ enum class EditorActionType {
     PreviewWorldSettings,
     // The project's pose keyframes, replaced whole (poseKeys).
     SetPoseKeys,
+    // The project's overlay layers, replaced whole (overlays).
+    SetOverlays,
+    // While a layer control is dragged: shown live, not an undo step. Without overlays it ends the preview.
+    PreviewOverlays,
 };
 
 struct EditorAction {
@@ -119,10 +128,10 @@ struct EditorAction {
     std::optional<std::array<editing::model::Vec2, 2>> bezierControls;
     // SetCameraFollow: the third-person track's new follow settings.
     std::optional<editing::model::FollowSettings> followSettings;
-    // SetKeyframeShake: the key's new shake frequency (Hz); none keeps the key's own.
-    std::optional<float> shakeFrequency;
-    // SetCameraShake: the keyframe track's new shake settings.
-    std::optional<editing::model::ShakeSettings> shakeSettings;
+    // SetCameraProperties / PreviewCameraProperties: the keyframe track's new properties.
+    std::optional<editing::model::CameraProperties> cameraProperties;
+    // SetOverlays / PreviewOverlays: the project's new overlay layers.
+    std::optional<std::vector<editing::model::OverlayItem>> overlays;
 };
 
 } // namespace playback::state

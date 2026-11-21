@@ -119,7 +119,7 @@ target("playback")
     add_packages("libzip")
     add_packages("imgui")
     add_packages("cpp-httplib")
-    add_syslinks("d3d11", "d3d12", "dxgi", "dcomp", "d3dcompiler", "windowscodecs", "ole32", "comdlg32", "shell32", "gdi32", "ws2_32")
+    add_syslinks("d3d11", "d3d12", "dxgi", "dcomp", "d3dcompiler", "d2d1", "dwrite", "windowscodecs", "ole32", "comdlg32", "shell32", "gdi32", "ws2_32")
     set_kind("shared")
     set_languages("c++20")
     if is_mode("debug") then

@@ -354,6 +354,7 @@ bool makeBlockNetworkIdsPortable(Packet& packet, BlockPalette const& palette) {
 
 bool packetMayReferenceRecordedPlayer(MinecraftPacketIds packetId) {
     switch (packetId) {
+    case MinecraftPacketIds::AddActor:
     case MinecraftPacketIds::AddPlayer:
     case MinecraftPacketIds::PlayerList:
     case MinecraftPacketIds::PlayerSkin:
@@ -388,6 +389,13 @@ bool referencesRecordedPlayer(
     auto const runtime = [&sourceRuntimeId](ActorRuntimeID const& id) { return id.rawID == sourceRuntimeId.rawID; };
     auto const unique  = [&sourceUniqueId](ActorUniqueID const& id) { return id.rawID == sourceUniqueId.rawID; };
     switch (packet.getId()) {
+    case MinecraftPacketIds::AddActor: {
+        // A vehicle lists its passengers, the recording player among them while it rides.
+        auto const& links = *static_cast<AddActorPacket const&>(packet).mLinks;
+        return std::any_of(links.begin(), links.end(), [&unique](ActorLink const& link) {
+            return unique(link.A) || unique(link.B);
+        });
+    }
     case MinecraftPacketIds::AddPlayer: {
         auto const& addPlayer = static_cast<AddPlayerPacket const&>(packet);
         if (unique(*addPlayer.mAbilitiesData->mTargetPlayer) || runtime(addPlayer.mRuntimeId)
@@ -456,6 +464,14 @@ bool remapRecordedPlayerReferences(
     mce::UUID const& targetUuid
 ) {
     switch (packet.getId()) {
+    case MinecraftPacketIds::AddActor: {
+        bool changed = false;
+        for (auto& link : *static_cast<AddActorPacket&>(packet).mLinks) {
+            changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
+            changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
+        }
+        return changed;
+    }
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
         bool  changed   = addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid
@@ -2044,6 +2060,16 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
 
             auto packet = actor->tryCreateAddActorPacket();
             if (!packet) continue;
+            // A vehicle the recording player rides names it by its live ID, which the replay does not know.
+            remapRecordedPlayerReferences(
+                *packet,
+                finalPlayer->getOrCreateUniqueID(),
+                finalPlayer->getRuntimeID(),
+                finalPlayer->getUuid(),
+                *mRecordedLocalPlayerId,
+                *mRecordedLocalPlayerRuntimeId,
+                *mRecordedLocalPlayerUuid
+            );
             appendEntityPacket(*packet);
             if (!appendActorState(*actor, actor->getRuntimeID())) return SnapshotCaptureResult::Failed;
         }

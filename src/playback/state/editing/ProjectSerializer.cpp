@@ -108,9 +108,6 @@ json toJson(CameraKeyframe const& key) {
         {"yaw",               key.yaw                                },
         {"pitch",             key.pitch                              },
         {"roll",              key.roll                               },
-        {"fov",               key.fov                                },
-        {"shake",             key.shake                              },
-        {"shakeFrequency",    key.shakeFrequency                     },
         {"interpolationType", static_cast<int>(key.interpolationType)},
         {"bezierCtrl1",       toJson(key.bezierCtrl1)                },
         {"bezierCtrl2",       toJson(key.bezierCtrl2)                },
@@ -124,9 +121,6 @@ CameraKeyframe keyframeFrom(json const& node) {
     key.yaw               = finiteOr(node, "yaw", key.yaw);
     key.pitch             = finiteOr(node, "pitch", key.pitch);
     key.roll              = finiteOr(node, "roll", key.roll);
-    key.fov               = finiteOr(node, "fov", key.fov);
-    key.shake             = sanitizedShakeStrength(finiteOr(node, "shake", key.shake));
-    key.shakeFrequency    = sanitizedShakeFrequency(finiteOr(node, "shakeFrequency", key.shakeFrequency));
     key.interpolationType = enumOr(
         node,
         "interpolationType",
@@ -137,6 +131,62 @@ CameraKeyframe keyframeFrom(json const& node) {
     key.bezierCtrl2 = vec2From(node, "bezierCtrl2", key.bezierCtrl2);
     key.subject     = stringOr(node, "subject");
     return key;
+}
+
+json toJson(ValueChannels const& channels) {
+    json result = json::object();
+    for (auto const& [name, channel] : channels) {
+        if (channel.empty()) continue;
+        auto keys = json::array();
+        for (auto const& [tick, key] : channel) {
+            keys.push_back({
+                {"tick",   tick                         },
+                {"value",  key.value                    },
+                {"easing", static_cast<int>(key.easing)},
+            });
+        }
+        result[name] = std::move(keys);
+    }
+    return result;
+}
+
+ValueChannels channelsFrom(json const& node, char const* key) {
+    ValueChannels channels;
+    auto const*   object = objectAt(node, key);
+    if (!object) return channels;
+    for (auto const& [name, keys] : object->items()) {
+        if (!keys.is_array()) continue;
+        auto& channel = channels[name];
+        for (auto const& entry : keys) {
+            if (!entry.is_object()) continue;
+            channel.insert_or_assign(
+                intOr(entry, "tick", 0),
+                ValueKey{finiteOr(entry, "value", 0.0f), enumOr(entry, "easing", KeyEasing::EaseInOut, static_cast<int>(KeyEasing::Hold))}
+            );
+        }
+    }
+    pruneChannels(channels);
+    return channels;
+}
+
+// Projects from before properties keyed on their own held FOV and shake in every Transform key: a value the keys
+// all share becomes the static value, one that changes becomes the property's own keys.
+void migrateKeyProperty(CameraEntity& camera, json const& keys, char const* field, char const* property, float fallback) {
+    ValueChannel channel;
+    for (auto const& entry : keys) {
+        if (!entry.is_object() || !entry.contains(field)) continue;
+        float value = finiteOr(entry, field, fallback);
+        if (std::string_view{property} == CameraProperty::ShakeStrength) value = sanitizedShakeStrength(value);
+        if (std::string_view{property} == CameraProperty::ShakeFrequency) value = sanitizedShakeFrequency(value);
+        channel.insert_or_assign(intOr(entry, "tick", 0), ValueKey{value, KeyEasing::Linear});
+    }
+    if (channel.empty()) return;
+    float const first = channel.begin()->second.value;
+    if (std::ranges::all_of(channel, [first](auto const& entry) { return entry.second.value == first; })) {
+        setCameraStaticValue(camera, property, first);
+    } else {
+        camera.channels[property] = std::move(channel);
+    }
 }
 
 json toJson(CameraEntity const& camera) {
@@ -165,6 +215,10 @@ json toJson(CameraEntity const& camera) {
             {"rollAmount",     camera.shake.rollAmount    },
             {"seed",           camera.shake.seed          }
         };
+        result["fov"]            = camera.fov;
+        result["shakeStrength"]  = camera.shakeStrength;
+        result["shakeFrequency"] = camera.shakeFrequency;
+        result["channels"]       = toJson(camera.channels);
     }
     if (camera.limiter) {
         result["limiter"] = {
@@ -205,7 +259,16 @@ CameraEntity cameraFrom(json const& node) {
             if (!entry.is_object()) continue;
             camera.keysByTick.insert_or_assign(intOr(entry, "tick", 0), keyframeFrom(entry));
         }
+        if (!node.contains("channels")) {
+            migrateKeyProperty(camera, *keys, "fov", CameraProperty::Fov, camera.fov);
+            migrateKeyProperty(camera, *keys, "shake", CameraProperty::ShakeStrength, 0.0f);
+            migrateKeyProperty(camera, *keys, "shakeFrequency", CameraProperty::ShakeFrequency, camera.shakeFrequency);
+        }
     }
+    camera.fov            = finiteOr(node, "fov", camera.fov);
+    camera.shakeStrength  = sanitizedShakeStrength(finiteOr(node, "shakeStrength", camera.shakeStrength));
+    camera.shakeFrequency = sanitizedShakeFrequency(finiteOr(node, "shakeFrequency", camera.shakeFrequency));
+    if (node.contains("channels")) camera.channels = channelsFrom(node, "channels");
     if (auto const* shake = objectAt(node, "shake")) {
         ShakeSettings const defaults;
         camera.shake.positionAmount = finiteOr(*shake, "positionAmount", defaults.positionAmount);
@@ -393,11 +456,157 @@ Transition transitionFrom(json const& node) {
     return transition;
 }
 
+json toJson(OverlayItem const& item) {
+    auto const& t = item.transform;
+    auto const& title = item.title;
+    auto const& shape = item.shape;
+    auto const& model = item.model;
+    return {
+        {"id",           item.id                       },
+        {"name",         item.name                     },
+        {"kind",         static_cast<int>(item.kind)   },
+        {"startTick",    item.startTick                },
+        {"endTick",      item.endTick                  },
+        {"fadeInTicks",  item.fadeInTicks              },
+        {"fadeOutTicks", item.fadeOutTicks             },
+        {"visible",      item.visible                  },
+        {"locked",       item.locked                   },
+        {"transform",
+         json{
+             {"x", t.x},
+             {"y", t.y},
+             {"width", t.width},
+             {"height", t.height},
+             {"rotation", t.rotation},
+             {"skewX", t.skewX},
+             {"skewY", t.skewY},
+             {"tiltX", t.tiltX},
+             {"tiltY", t.tiltY},
+             {"opacity", t.opacity},
+         }                                             },
+        {"title",
+         json{
+             {"text", title.text},
+             {"fontFamily", title.fontFamily},
+             {"fontSize", title.fontSize},
+             {"bold", title.bold},
+             {"italic", title.italic},
+             {"align", static_cast<int>(title.align)},
+             {"color", toJson(title.color)},
+             {"outlineWidth", title.outlineWidth},
+             {"outlineColor", toJson(title.outlineColor)},
+         }                                             },
+        {"shape",
+         json{
+             {"kind", static_cast<int>(shape.kind)},
+             {"points", shape.points},
+             {"fill", toJson(shape.fill)},
+             {"strokeWidth", shape.strokeWidth},
+             {"stroke", toJson(shape.stroke)},
+             {"cornerRadius", shape.cornerRadius},
+         }                                             },
+        {"model",
+         json{
+             {"file", model.file},
+             {"position", toJson(model.position)},
+             {"yaw", model.yaw},
+             {"pitch", model.pitch},
+             {"roll", model.roll},
+             {"scale", model.scale},
+         }                                             },
+        {"channels",     toJson(item.channels)         },
+    };
+}
+
+OverlayItem overlayFrom(json const& node) {
+    OverlayItem item;
+    item.id           = stringOr(node, "id");
+    item.name         = stringOr(node, "name");
+    item.kind         = enumOr(node, "kind", item.kind, static_cast<int>(OverlayKind::Model));
+    item.startTick    = std::max(0, intOr(node, "startTick", item.startTick));
+    item.endTick      = std::max(item.startTick + 1, intOr(node, "endTick", item.endTick));
+    item.fadeInTicks  = std::max(0, intOr(node, "fadeInTicks", 0));
+    item.fadeOutTicks = std::max(0, intOr(node, "fadeOutTicks", 0));
+    item.visible      = boolOr(node, "visible", true);
+    item.locked       = boolOr(node, "locked", false);
+    if (auto const* t = objectAt(node, "transform")) {
+        auto& out    = item.transform;
+        out.x        = finiteOr(*t, "x", out.x);
+        out.y        = finiteOr(*t, "y", out.y);
+        out.width    = finiteOr(*t, "width", out.width);
+        out.height   = finiteOr(*t, "height", out.height);
+        out.rotation = finiteOr(*t, "rotation", out.rotation);
+        out.skewX    = finiteOr(*t, "skewX", out.skewX);
+        out.skewY    = finiteOr(*t, "skewY", out.skewY);
+        out.tiltX    = finiteOr(*t, "tiltX", out.tiltX);
+        out.tiltY    = finiteOr(*t, "tiltY", out.tiltY);
+        out.opacity  = std::clamp(finiteOr(*t, "opacity", out.opacity), 0.0f, 1.0f);
+    }
+    if (auto const* title = objectAt(node, "title")) {
+        auto& out        = item.title;
+        out.text         = stringOr(*title, "text");
+        out.fontFamily   = stringOr(*title, "fontFamily");
+        if (out.fontFamily.empty()) out.fontFamily = TitleStyle{}.fontFamily;
+        out.fontSize     = std::max(0.001f, finiteOr(*title, "fontSize", out.fontSize));
+        out.bold         = boolOr(*title, "bold", out.bold);
+        out.italic       = boolOr(*title, "italic", out.italic);
+        out.align        = enumOr(*title, "align", out.align, static_cast<int>(TextAlign::Right));
+        out.color        = colorFrom(*title, "color", out.color);
+        out.outlineWidth = std::max(0.0f, finiteOr(*title, "outlineWidth", out.outlineWidth));
+        out.outlineColor = colorFrom(*title, "outlineColor", out.outlineColor);
+    }
+    if (auto const* shape = objectAt(node, "shape")) {
+        auto& out        = item.shape;
+        out.kind         = enumOr(*shape, "kind", out.kind, static_cast<int>(ShapeKind::Polygon));
+        out.points       = std::clamp(intOr(*shape, "points", out.points), 3, 64);
+        out.fill         = colorFrom(*shape, "fill", out.fill);
+        out.strokeWidth  = std::max(0.0f, finiteOr(*shape, "strokeWidth", out.strokeWidth));
+        out.stroke       = colorFrom(*shape, "stroke", out.stroke);
+        out.cornerRadius = std::max(0.0f, finiteOr(*shape, "cornerRadius", out.cornerRadius));
+    }
+    if (auto const* model = objectAt(node, "model")) {
+        auto& out = item.model;
+        out.file  = stringOr(*model, "file");
+        if (auto const* position = objectAt(*model, "position")) {
+            out.position = {
+                finiteOr(*position, "x", 0.0f),
+                finiteOr(*position, "y", 0.0f),
+                finiteOr(*position, "z", 0.0f),
+            };
+        }
+        out.yaw   = finiteOr(*model, "yaw", out.yaw);
+        out.pitch = finiteOr(*model, "pitch", out.pitch);
+        out.roll  = finiteOr(*model, "roll", out.roll);
+        out.scale = std::max(0.001f, finiteOr(*model, "scale", out.scale));
+    }
+    item.channels = channelsFrom(node, "channels");
+    return item;
+}
+
 } // namespace
+
+std::string serializeOverlays(std::vector<model::OverlayItem> const& overlays) {
+    auto array = json::array();
+    for (auto const& item : overlays) array.push_back(toJson(item));
+    return array.dump();
+}
+
+bool deserializeOverlays(std::string const& payload, std::vector<model::OverlayItem>& overlays) {
+    auto const document = json::parse(payload, nullptr, false);
+    if (document.is_discarded() || !document.is_array()) return false;
+    std::vector<model::OverlayItem> loaded;
+    for (auto const& entry : document) {
+        if (entry.is_object()) loaded.push_back(overlayFrom(entry));
+    }
+    overlays = std::move(loaded);
+    return true;
+}
 
 std::string serializeProject(model::EditorStateExt const& project) {
     auto cameras = json::array();
     for (auto const& camera : project.cameras) cameras.push_back(toJson(camera));
+    auto overlays = json::array();
+    for (auto const& item : project.overlays) overlays.push_back(toJson(item));
 
     auto worldSegments = json::array();
     for (auto const& segment : project.worldActor.segments) worldSegments.push_back(toJson(segment));
@@ -453,6 +662,7 @@ std::string serializeProject(model::EditorStateExt const& project) {
          }                                                             },
         {"markers",                   std::move(markers)               },
         {"poseKeys",                  std::move(poseKeys)              },
+        {"overlays",                  std::move(overlays)              },
         {"videoTracks",               std::move(videoTracks)           },
         {"transitions",               std::move(transitions)           },
         {"world",
@@ -478,7 +688,8 @@ std::string serializeProject(model::EditorStateExt const& project) {
              {"overrideColor", project.world.overrideColor},
              {"exposure", project.world.exposure},
              {"temperature", project.world.temperature},
-             {"tint", project.world.tint}
+             {"tint", project.world.tint},
+             {"channels", toJson(project.world.channels)}
          }                                                             },
         {"recordedCameraTracksAdded", project.recordedCameraTracksAdded}
     };
@@ -551,6 +762,11 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
             loaded.poseKeys.push_back(std::move(key));
         }
     }
+    if (auto const* overlays = arrayAt(document, "overlays")) {
+        for (auto const& entry : *overlays) {
+            if (entry.is_object()) loaded.overlays.push_back(overlayFrom(entry));
+        }
+    }
     if (auto const* tracks = arrayAt(document, "videoTracks")) {
         for (auto const& entry : *tracks) {
             if (entry.is_object()) loaded.videoTracks.push_back(trackFrom(entry));
@@ -604,6 +820,7 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.world.exposure      = finiteOr(*world, "exposure", defaults.exposure);
         loaded.world.temperature   = finiteOr(*world, "temperature", defaults.temperature);
         loaded.world.tint          = finiteOr(*world, "tint", defaults.tint);
+        loaded.world.channels      = channelsFrom(*world, "channels");
         loaded.world              = loaded.world.sanitized();
     }
     loaded.recordedCameraTracksAdded = boolOr(document, "recordedCameraTracksAdded", false);

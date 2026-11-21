@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace playback::state::editing::model {
 struct EditorStateExt;
@@ -105,6 +107,8 @@ struct ExportSettings {
     uint32_t   audioBitrateKbps{192};
     // Leave the whole HUD out of the captured frames, whatever the preview shows.
     bool hideHud{false};
+    // PNG only: the single frame at startTick written as <outputName>.png, not a numbered sequence in a folder.
+    bool stillFrame{false};
 };
 
 enum class ExportError : uint8_t {
@@ -156,6 +160,9 @@ struct ExportStatus {
 struct ExportFramePlan {
     int64_t              replayTickNumerator{};
     int64_t              replayTickDenominator{1};
+    // The same instant on the output's own clock (cut stretches of the replay removed), over replayTickDenominator:
+    // the game's clock advances by this, while the replay jumps over the cuts.
+    int64_t              timelineTickNumerator{};
     visuals::FrameTicket ticket;
 };
 
@@ -167,6 +174,9 @@ struct CompiledExportPlan {
     int64_t               replayTickStartNumerator{};
     int64_t               replayTickStepNumerator{};
     int64_t               replayTickDenominator{1};
+    // The stretches of the replay the output plays, in replay ticks, in order: the export range less the replay
+    // layer's cuts. A frame's time on the output maps into them end to end.
+    std::vector<std::pair<int64_t, int64_t>> keptRanges;
 
     // Frames rendered: settings.motionBlurSamples per output frame, which the coordinator averages into one.
     [[nodiscard]] uint64_t renderFrameCount() const { return frameCount * settings.motionBlurSamples; }

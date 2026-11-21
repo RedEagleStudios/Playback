@@ -18,33 +18,36 @@ std::string splitAt(model::WorldActor& worldActor, int atTick) {
     segments.insert(std::next(it), right);
     return right.id;
 }
+
+// Segments play the replay where they sit, so a trim only moves an edge into a gap: it never pushes a neighbour.
 bool trimSegment(model::WorldActor& worldActor, const std::string& id, int start, int end, int totalTicks) {
     auto& segments = worldActor.segments;
     auto  it = std::find_if(segments.begin(), segments.end(), [&](const auto& segment) { return segment.id == id; });
     if (it == segments.end() || it->locked || start >= end || (it->startTick == start && it->endTick == end))
         return false;
-    size_t index = std::distance(segments.begin(), it);
-    if ((index == 0 && start != 0) || (index + 1 == segments.size() && end != totalTicks)) return false;
-    if (index && (segments[index - 1].locked || start <= segments[index - 1].startTick)) return false;
-    if (index + 1 < segments.size() && (segments[index + 1].locked || end >= segments[index + 1].endTick)) return false;
-    if (index) segments[index - 1].endTick = start;
-    if (index + 1 < segments.size()) segments[index + 1].startTick = end;
-    it->startTick = start;
-    it->endTick   = end;
+    size_t const index = static_cast<size_t>(std::distance(segments.begin(), it));
+    int const    floor = index ? segments[index - 1].endTick : 0;
+    int const    ceil  = index + 1 < segments.size() ? segments[index + 1].startTick : totalTicks;
+    if (start < floor || end > ceil) return false;
+    it->sourceTick += start - it->startTick;
+    it->startTick   = start;
+    it->endTick     = end;
     return true;
 }
-bool rippleDelete(model::WorldActor& worldActor, const std::string& id, int totalTicks) {
+
+bool deleteSegment(model::WorldActor& worldActor, const std::string& id) {
     auto& segments = worldActor.segments;
     auto  it = std::find_if(segments.begin(), segments.end(), [&](const auto& segment) { return segment.id == id; });
-    if (it == segments.end()) return false;
-    return [&] {
-        auto index = static_cast<size_t>(std::distance(segments.begin(), it));
-        if (segments.size() <= 1 || it->locked) return false;
-        if (index == 0) segments[1].startTick = 0;
-        else if (index + 1 == segments.size()) segments[index - 1].endTick = totalTicks;
-        else segments[index - 1].endTick = segments[index + 1].startTick;
-        segments.erase(segments.begin() + index);
-        return true;
-    }();
+    // The replay keeps at least one segment, or nothing would play.
+    if (it == segments.end() || it->locked || segments.size() <= 1) return false;
+    segments.erase(it);
+    return true;
+}
+
+std::optional<int> nextPlayableTick(model::WorldActor const& worldActor, int tick) {
+    for (auto const& segment : worldActor.segments) {
+        if (tick < segment.endTick) return std::max(tick, segment.startTick);
+    }
+    return std::nullopt;
 }
 } // namespace playback::state::editing::WorldActorOps

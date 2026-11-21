@@ -5,6 +5,7 @@
 #include "playback/audio/PreviewAudio.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
+#include "playback/editor/input/FlySpeed.h"
 #include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/ExportEcoMode.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
@@ -194,6 +195,7 @@ LL_TYPE_INSTANCE_HOOK(
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
     replay.updateFrame();
+    editor::input::tickFlySpeed(getLocalPlayer(), replay.isActive() && replay.hasJoinedReplayWorld());
     audio::preview::update(
         replay.isActive(),
         replay.isPaused(),

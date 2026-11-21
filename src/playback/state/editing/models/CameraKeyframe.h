@@ -20,16 +20,13 @@ enum class CameraInterpolationType : uint8_t {
     CubicBezier,
 };
 
+// A keyframe track's Transform key: where the camera is and where it looks. FOV and shake are properties of the track
+// keyed on their own (CameraEntity::channels), so keying one never adds a Transform key.
 struct CameraKeyframe {
     Vec3  position{0, 80, 0};
     float yaw{0.0f};
     float pitch{0.0f};
     float roll{0.0f};
-    float fov{70.0f};
-    // Keyframe tracks only: how hard (0 is still) and how fast (Hz) the camera shakes, scaled by the track's
-    // ShakeSettings. Both blend between keys, so keys fade a shake in and out.
-    float shake{0.0f};
-    float shakeFrequency{ShakeSettings::DefaultFrequency};
 
     CameraInterpolationType interpolationType{CameraInterpolationType::Smooth};
     Vec2                    bezierCtrl1{0.42f, 0.0f};

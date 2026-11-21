@@ -3,6 +3,7 @@
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
 #include "playback/state/editing/commands/PoseCommands.h"
+#include "playback/state/editing/commands/OverlayCommands.h"
 #include "playback/state/editing/commands/SubActorCommands.h"
 #include "playback/state/editing/commands/WorldActorCommands.h"
 #include "playback/state/editing/commands/WorldCommands.h"
@@ -16,8 +17,8 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createTrimWorldActor(const 
     return std::make_unique<TrimWorldActorSegment>(id, start, end);
 }
 
-std::unique_ptr<model::IEditCommand> CommandFactory::createRippleDeleteWorldActorSegment(const std::string& id) {
-    return std::make_unique<RippleDeleteWorldActorSeg>(id);
+std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteWorldActorSegment(const std::string& id) {
+    return std::make_unique<DeleteWorldActorSegment>(id);
 }
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createAddFreeCamera(const std::string& name, model::CameraTrackKind kind) {
@@ -74,18 +75,6 @@ CommandFactory::createSetCameraKeyframeRotation(const std::string& id, int tick,
     return std::make_unique<SetCameraKeyframeRotation>(id, tick, rotation);
 }
 std::unique_ptr<model::IEditCommand>
-CommandFactory::createSetCameraKeyframeFov(const std::string& id, int tick, float fov) {
-    return std::make_unique<SetCameraKeyframeFov>(id, tick, fov);
-}
-std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraKeyframeShake(
-    const std::string&   id,
-    int                  tick,
-    float                shake,
-    std::optional<float> frequency
-) {
-    return std::make_unique<SetCameraKeyframeShake>(id, tick, shake, frequency);
-}
-std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetCameraKeyframeSubject(const std::string& id, int tick, const std::string& subject) {
     return std::make_unique<SetCameraKeyframeSubject>(id, tick, subject);
 }
@@ -100,8 +89,8 @@ CommandFactory::createSetCameraFollow(const std::string& id, model::FollowSettin
     return std::make_unique<SetCameraFollow>(id, follow);
 }
 std::unique_ptr<model::IEditCommand>
-CommandFactory::createSetCameraShake(const std::string& id, model::ShakeSettings const& shake) {
-    return std::make_unique<SetCameraShake>(id, shake);
+CommandFactory::createSetCameraProperties(const std::string& id, model::CameraProperties properties) {
+    return std::make_unique<SetCameraProperties>(id, std::move(properties));
 }
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createRenameCamera(const std::string& id, const std::string& name) {
@@ -151,6 +140,14 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetWorldSettings(mode
 
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetPoseKeys(std::vector<model::PoseKey> keys) {
     return std::make_unique<SetPoseKeys>(std::move(keys));
+}
+
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetOverlays(std::vector<model::OverlayItem> overlays) {
+    return std::make_unique<SetOverlays>(std::move(overlays));
+}
+
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetWorldActorLocked(bool locked) {
+    return std::make_unique<SetWorldActorLocked>(locked);
 }
 
 } // namespace playback::state::editing::command

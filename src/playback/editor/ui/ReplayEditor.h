@@ -70,6 +70,7 @@ public:
     [[nodiscard]] float videoAspectRatio() const override { return mVideoAspectRatio; }
     void                setVideoAspectRatio(float ratio) override;
     void                openExportDialog() override;
+    void                exportStillFrame() override;
     [[nodiscard]] int   exportStartTick() const override { return mMenuBar.exportStartTick(); }
     [[nodiscard]] int   exportEndTick() const override { return mMenuBar.exportEndTick(); }
     void                setExportStartTick(int tick) override { mMenuBar.setExportStartTick(tick); }
@@ -146,6 +147,9 @@ private:
     ViewShading              mViewShading{ViewShading::Rendered};
     std::string              mRenderShaderPack;
     std::vector<std::string> mShaderPacks;
+    // Playback's Flat pack as installed in Arke when this replay opened; empty without Arke, where Flat falls back to
+    // Simple graphics at full brightness.
+    std::string mFlatShaderPack;
     // Whether the pack was ever picked (else Arke's own pack is taken when a replay opens), and whether this replay
     // has listed the packs and put the view in place; the latter resets when the replay closes.
     bool mRenderShaderPackChosen{};

@@ -363,6 +363,33 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable, float
     mExportDialogOpen     = true;
 }
 
+exporting::ExportSettings EditorMenuBar::stillFrameSettings(int tick, int totalTicks, float frameAspect) const {
+    // The export dialog's folder, size and quality, for the one frame under the playhead.
+    exporting::ExportSettings settings;
+    settings.outputDirectory = utf8Path(mExportDirectory.data());
+    settings.outputName      = timestampName() + "-frame-" + std::to_string(tick);
+    settings.startTick       = std::clamp(tick, 0, std::max(0, totalTicks - 1));
+    settings.endTick         = settings.startTick + 1;
+    settings.frameRate       = {20, 1};
+    settings.format          = exporting::ExportFormat::PngSequence;
+    settings.stillFrame      = true;
+    int width                = std::max(16, mExportWidth);
+    int height               = std::max(16, mExportHeight);
+    if (mExportMatchProject && frameAspect > 0.0f) {
+        auto const preset = resolutionPreset(std::min(width, height), frameAspect);
+        width             = preset.width;
+        height            = preset.height;
+    }
+    settings.resolutionX  = static_cast<uint32_t>(width);
+    settings.resolutionY  = static_cast<uint32_t>(height);
+    settings.ssaa         = 1u << std::clamp(mExportSsaa, 0, 2);
+    settings.warmupFrames = static_cast<uint32_t>(std::max(0, mExportWarmupFrames));
+    settings.extraRenders = static_cast<uint32_t>(std::max(0, mExportExtraRenders));
+    settings.hideHud      = mExportHideHud;
+    settings.audio        = false;
+    return settings;
+}
+
 void EditorMenuBar::markExportPoint(bool isIn, int tick, int totalTicks) {
     totalTicks = std::max(0, totalTicks);
     tick       = std::clamp(tick, 0, totalTicks);
@@ -423,6 +450,14 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                     capabilities.videoExport && !exportActive && state.totalTicks > 0
                 )) {
                 openExportDialog(state.totalTicks, capabilities.ffmpegVideoExport, ctx.commands.videoAspectRatio());
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.exportStill"_tr().c_str(),
+                    nullptr,
+                    false,
+                    capabilities.videoExport && !exportActive && state.totalTicks > 0
+                )) {
+                ctx.commands.exportStillFrame();
             }
             ImGui::Separator();
             if (ImGui::MenuItem("playback.refactorEditor.menu.exit"_tr().c_str(), "Esc (hold)")) {

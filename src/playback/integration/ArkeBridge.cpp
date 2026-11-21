@@ -1,6 +1,7 @@
 #include "playback/integration/ArkeBridge.h"
 
 #include "playback/Playback.h"
+#include "playback/integration/FlatShaderPack.h"
 
 #include "nlohmann/json.hpp"
 
@@ -182,7 +183,9 @@ std::vector<std::string> arkeShaderPacks() {
         // Arke keeps each pack's options beside it as `<pack>.txt`.
         if (entry.is_directory(error) || name.extension() == ".zip") {
             auto const text = name.u8string();
-            packs.emplace_back(text.begin(), text.end());
+            std::string pack(text.begin(), text.end());
+            // Playback's own pack for the Flat view is not a look to render with.
+            if (pack != FlatShaderPackName) packs.push_back(std::move(pack));
         }
     }
     std::ranges::sort(packs);

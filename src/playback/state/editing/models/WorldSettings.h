@@ -7,6 +7,10 @@
 #include <string>
 #include <vector>
 
+#include "PropertyChannel.h"
+
+#include <string_view>
+
 namespace playback::state::editing::model {
 
 // The game's graphics modes a project can pick; the values are the game's GraphicsMode option values.
@@ -80,6 +84,9 @@ struct WorldSettings {
     // [-1, 1]: cool to warm, and green to magenta.
     float temperature{};
     float tint{};
+    // Keyed numbers (worldProperty names), each on its own, by replay tick; a property without keys keeps the value
+    // above. The switches are never keyed.
+    ValueChannels channels;
 
     static constexpr float MaxExposure = 3.0f;
 
@@ -114,5 +121,47 @@ struct WorldSettings {
 
     bool operator==(WorldSettings const&) const = default;
 };
+
+// The world's keyable numbers, by name; an unknown name gives null. The time of day keys as a float and rounds.
+[[nodiscard]] inline float* worldProperty(WorldSettings& world, std::string_view name) {
+    if (name == "fogStart") return &world.fogStart;
+    if (name == "fogEnd") return &world.fogEnd;
+    if (name == "fogColorR") return &world.fogColor[0];
+    if (name == "fogColorG") return &world.fogColor[1];
+    if (name == "fogColorB") return &world.fogColor[2];
+    if (name == "fov") return &world.fov;
+    if (name == "exposure") return &world.exposure;
+    if (name == "temperature") return &world.temperature;
+    if (name == "tint") return &world.tint;
+    return nullptr;
+}
+
+inline constexpr char const* WorldTimeOfDay = "timeOfDay";
+
+// A property's value as set (not keyed).
+[[nodiscard]] inline float worldStaticValue(WorldSettings const& world, std::string_view name) {
+    if (name == WorldTimeOfDay) return static_cast<float>(world.timeOfDay);
+    // worldProperty only locates the field; nothing is written through it here.
+    float const* field = worldProperty(const_cast<WorldSettings&>(world), name);
+    return field ? *field : 0.0f;
+}
+
+inline void setWorldStaticValue(WorldSettings& world, std::string_view name, float value) {
+    if (name == WorldTimeOfDay) {
+        world.timeOfDay = static_cast<int>(std::lround(value));
+        return;
+    }
+    if (float* field = worldProperty(world, name)) *field = value;
+}
+
+// The world as it stands at `tick`: every keyed property at its keyed value, brought into range.
+[[nodiscard]] inline WorldSettings worldAt(WorldSettings const& world, double tick) {
+    if (world.channels.empty()) return world;
+    WorldSettings result = world;
+    for (auto const& [name, channel] : world.channels) {
+        if (auto const value = sampleChannel(channel, tick)) setWorldStaticValue(result, name, *value);
+    }
+    return result.sanitized();
+}
 
 } // namespace playback::state::editing::model

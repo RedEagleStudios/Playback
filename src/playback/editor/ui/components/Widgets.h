@@ -21,11 +21,21 @@ bool iconButton(char const* id, char const* icon, char const* tooltip, bool enab
 // Icon button that stays lit while `active`, for view toggles in toolbars.
 bool iconToggle(char const* id, char const* icon, char const* tooltip, bool active, bool enabled = true);
 
+// An icon toggle of an explicit square `size`, its glyph scaled to match, for bands shorter than a toolbar.
+bool compactIconToggle(char const* id, char const* icon, char const* tooltip, bool active, float size);
+
 // Icon glyphs are drawn larger than body text so they read as buttons rather than characters.
 [[nodiscard]] float iconGlyphSize();
 
-// Centres an icon glyph on its ink box inside a square of `boxSize`.
-void drawIconCentred(ImDrawList* drawList, char const* icon, ImVec2 const& origin, float boxSize, ImU32 color);
+// Centres an icon glyph on its ink box inside a square of `boxSize`; `glyphSize` 0 is the standard icon size.
+void drawIconCentred(
+    ImDrawList*   drawList,
+    char const*   icon,
+    ImVec2 const& origin,
+    float         boxSize,
+    ImU32         color,
+    float         glyphSize = 0.0f
+);
 
 // Y offset that puts the cap height of body text on a box's centre line.
 [[nodiscard]] float textOffsetInBox(float boxHeight);
@@ -40,7 +50,7 @@ void drawIconCentred(ImDrawList* drawList, char const* icon, ImVec2 const& origi
 [[nodiscard]] float textInkCentre(float drawY, char const* text);
 
 // Icon whose ink centre lands on `centre`, for rows whose height is not a whole number of pixels.
-void drawIconAtCentre(ImDrawList* drawList, char const* icon, ImVec2 const& centre, ImU32 color);
+void drawIconAtCentre(ImDrawList* drawList, char const* icon, ImVec2 const& centre, ImU32 color, float glyphSize = 0.0f);
 
 // Transport and window glyphs drawn from primitives so they share one weight and exact centring. The shading ones are
 // the viewport's view modes, as in a 3D package: a flat disc, a half-lit sphere and a shaded sphere.
@@ -101,5 +111,30 @@ void endCombo();
 
 // Draws the shared "no active project" placeholder.
 void noActiveProjectPlaceholder();
+
+// Number fields dragged left and right with the mouse (Shift faster, Alt finer); a double-click or Ctrl+click types a
+// value. With low < high the value is clamped, crossing the field's width sweeps the whole range and a fill shows
+// where the value sits; otherwise `speed` is the change per pixel. `speed` 0 picks it from the range.
+bool dragFloat(char const* id, float* value, float low, float high, char const* format, float speed = 0.0f);
+bool dragInt(char const* id, int* value, int low, int high, char const* format = "%d", float speed = 0.0f);
+// The same, for values committed once the drag or typing ends: returns true then, with the final value in `value`.
+bool dragFloatOnRelease(char const* id, float* value, float low, float high, char const* format, float speed = 0.0f);
+bool dragIntOnRelease(char const* id, int* value, int low, int high, char const* format = "%d", float speed = 0.0f);
+// `count` such fields side by side (a position, a size), sharing the next item width.
+bool dragFloatN(
+    char const* id,
+    float*      values,
+    int         count,
+    float       speed,
+    char const* format,
+    float       low  = 0.0f,
+    float       high = 0.0f
+);
+
+// A flat full-width row: an icon, a label and an on/off switch; the whole row toggles. Returns true when clicked.
+bool toggleRow(char const* id, char const* icon, char const* label, bool* value, char const* tooltip = nullptr);
+
+// A dim caption, with an optional icon, over the control that follows; that control then spans the row.
+void fieldLabel(char const* icon, char const* text);
 
 } // namespace playback::editor::ui::widgets

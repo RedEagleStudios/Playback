@@ -18,6 +18,9 @@ public:
 
     [[nodiscard]] static std::filesystem::path getProjectsDir();
 
+    // Saved shader option templates, one folder per pack: `<pack>/<name>.txt`.
+    [[nodiscard]] static std::filesystem::path getShaderTemplatesDir();
+
     [[nodiscard]] static std::filesystem::path getSharedTempDir();
 
     [[nodiscard]] static std::filesystem::path createTemp(std::string_view uuid);

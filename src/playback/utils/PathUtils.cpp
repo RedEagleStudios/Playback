@@ -13,6 +13,8 @@ std::filesystem::path PathUtils::getReplaysDir() { return getInstance().mDataDir
 
 std::filesystem::path PathUtils::getProjectsDir() { return getInstance().mDataDir / "projects"; }
 
+std::filesystem::path PathUtils::getShaderTemplatesDir() { return getInstance().mDataDir / "shader_templates"; }
+
 std::filesystem::path PathUtils::getSharedTempDir() { return getInstance().mDataDir / "temp"; }
 
 std::filesystem::path PathUtils::createTemp(std::string_view uuid) {

@@ -2,7 +2,9 @@
 
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/EasingPresetPicker.h"
+#include "playback/editor/ui/components/KeyframeControls.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
+#include "playback/editor/ui/components/OverlayEditing.h"
 #include "playback/editor/ui/components/TimelineScale.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
@@ -16,6 +18,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <format>
+#include <functional>
+#include <set>
 #include <limits>
 #include <ranges>
 
@@ -84,6 +89,102 @@ void drawKeyframeSquare(ImDrawList* drawList, float x, float centerY, float radi
     float const h = radius * 0.8f;
     drawList->AddRectFilled({x - h, centerY - h}, {x + h, centerY + h}, fill);
     drawList->AddRect({x - h, centerY - h}, {x + h, centerY + h}, outline, 0.0f, 0, 1.0f);
+}
+
+ImU32 layerColor(state::editing::model::OverlayKind kind) {
+    switch (kind) {
+    case state::editing::model::OverlayKind::Title:
+        return theme::kLayerTitle;
+    case state::editing::model::OverlayKind::Shape:
+        return theme::kLayerShape;
+    case state::editing::model::OverlayKind::Model:
+        return theme::kLayerModel;
+    }
+    return theme::kLayerTitle;
+}
+
+// A Property row's keys and the timeline tick they count from (a layer's keys count from its start).
+struct RowChannel {
+    state::editing::model::ValueChannel const* channel{};
+    int                                        offset{};
+};
+
+RowChannel rowChannel(state::editing::model::EditorStateExt const& project, TrackTreeRow const& row) {
+    state::editing::model::ValueChannels const* channels = nullptr;
+    int                                         offset   = 0;
+    switch (row.owner) {
+    case PropertyOwner::Camera:
+        if (auto const camera = std::ranges::find(project.cameras, row.ownerId, &state::editing::model::CameraEntity::id);
+            camera != project.cameras.end()) {
+            channels = &camera->channels;
+        }
+        break;
+    case PropertyOwner::Overlay:
+        if (auto const* item = overlays::find(project, row.ownerId)) {
+            channels = &item->channels;
+            offset   = item->startTick;
+        }
+        break;
+    case PropertyOwner::World:
+        channels = &project.world.channels;
+        break;
+    }
+    if (!channels) return {};
+    auto const channel = channels->find(row.property);
+    if (channel == channels->end() || channel->second.empty()) return {};
+    return {&channel->second, offset};
+}
+
+// Every keyed tick of a set of channels, on the timeline.
+std::set<int> keyTicks(state::editing::model::ValueChannels const& channels, int offset) {
+    std::set<int> ticks;
+    for (auto const& [name, channel] : channels) {
+        for (auto const& [tick, key] : channel) ticks.insert(tick + offset);
+    }
+    return ticks;
+}
+
+// Pixels either side of a bar's edge that grab the edge for a trim rather than the bar.
+constexpr float kEdgeGrabPixels = 5.0f;
+
+// A layer or segment bar on a lane, with its label clipped to the bar.
+void drawLaneBar(
+    ImDrawList*  drawList,
+    ImVec2       min,
+    ImVec2       max,
+    ImU32        color,
+    bool         selected,
+    bool         dimmed,
+    char const*  icon,
+    char const*  label,
+    float        clipLeft,
+    float        clipRight
+) {
+    if (max.x < clipLeft || min.x > clipRight) return;
+    float const rounding = 3.0f * metrics::scale();
+    drawList->AddRectFilled(min, max, theme::withAlpha(color, dimmed ? 0x38 : selected ? 0xc8 : 0x8c), rounding);
+    drawList->AddRect(
+        min,
+        max,
+        selected ? theme::kKeyframeSelected : theme::withAlpha(color, 0xff),
+        rounding,
+        0,
+        selected ? 2.0f : 1.0f
+    );
+    float const  pad = 4.0f * metrics::scale();
+    ImVec4 const clip{std::max(min.x, clipLeft) + pad, min.y, std::min(max.x, clipRight) - pad, max.y};
+    if (clip.z <= clip.x) return;
+    float const centreY = (min.y + max.y) * 0.5f;
+    float const glyph   = std::floor(metrics::font());
+    float       textX   = clip.x;
+    if (icon && clip.z - clip.x > glyph) {
+        widgets::drawIconAtCentre(drawList, icon, {textX + glyph * 0.5f, centreY}, theme::kText, glyph);
+        textX += glyph + pad;
+    }
+    if (label && *label) {
+        float const textY = widgets::textYForCentre(centreY, label);
+        drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {textX, textY}, theme::kText, label, nullptr, 0.0f, &clip);
+    }
 }
 
 } // namespace
@@ -209,6 +310,15 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
         action.type     = EditorActionType::SetPoseKeys;
         action.poseKeys = project->poseKeys;
         std::erase_if(*action.poseKeys, [&](auto const& key) { return key.id == selectedPose->poseKeyId; });
+    } else if (auto const* selectedOverlay = ctx.selection.getAs<state::editing::model::SelectedOverlay>()) {
+        auto const* item = overlays::find(*project, selectedOverlay->overlayId);
+        if (!item || item->locked) return false;
+        action.type     = EditorActionType::SetOverlays;
+        action.overlays = project->overlays;
+        std::erase_if(*action.overlays, [&](auto const& layer) { return layer.id == selectedOverlay->overlayId; });
+    } else if (auto const* selectedSegment = ctx.selection.getAs<state::editing::model::SelectedWorldActorSegment>()) {
+        action.type = EditorActionType::DeleteWorldActorSegment;
+        action.id   = selectedSegment->segmentId;
     } else if (auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
                selectedCamera && project->cameras.size() > 1) {
         action.type = EditorActionType::DeleteCamera;
@@ -374,6 +484,7 @@ void TimelinePanel::queueKeyframeSelection(std::vector<state::editing::model::Se
     mPendingKeySelection = std::move(keys);
     mPendingMarkerSelection.clear();
     mPendingPoseKeySelection.clear();
+    mPendingOverlaySelection.clear();
     mPendingSelectionFrames = kPendingSelectionFrames;
 }
 
@@ -381,6 +492,7 @@ void TimelinePanel::queueMarkerSelection(std::string markerId) {
     mPendingKeySelection.clear();
     mPendingMarkerSelection = std::move(markerId);
     mPendingPoseKeySelection.clear();
+    mPendingOverlaySelection.clear();
     mPendingSelectionFrames = kPendingSelectionFrames;
 }
 
@@ -388,6 +500,15 @@ void TimelinePanel::queuePoseKeySelection(std::string poseKeyId) {
     mPendingKeySelection.clear();
     mPendingMarkerSelection.clear();
     mPendingPoseKeySelection = std::move(poseKeyId);
+    mPendingOverlaySelection.clear();
+    mPendingSelectionFrames  = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueOverlaySelection(std::string overlayId) {
+    mPendingKeySelection.clear();
+    mPendingMarkerSelection.clear();
+    mPendingPoseKeySelection.clear();
+    mPendingOverlaySelection = std::move(overlayId);
     mPendingSelectionFrames  = kPendingSelectionFrames;
 }
 
@@ -398,7 +519,12 @@ void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     bool const lastChance = --mPendingSelectionFrames == 0;
 
     bool done = false;
-    if (!mPendingPoseKeySelection.empty()) {
+    if (!mPendingOverlaySelection.empty()) {
+        if (overlays::find(*project, mPendingOverlaySelection)) {
+            ctx.selection.select(state::editing::model::SelectedOverlay{mPendingOverlaySelection});
+            done = true;
+        }
+    } else if (!mPendingPoseKeySelection.empty()) {
         if (std::ranges::any_of(project->poseKeys, [&](auto const& key) { return key.id == mPendingPoseKeySelection; })) {
             ctx.selection.select(state::editing::model::SelectedPoseKey{mPendingPoseKeySelection});
             done = true;
@@ -424,6 +550,7 @@ void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
         mPendingKeySelection.clear();
         mPendingMarkerSelection.clear();
         mPendingPoseKeySelection.clear();
+        mPendingOverlaySelection.clear();
         mPendingSelectionFrames = 0;
     }
 }
@@ -658,7 +785,32 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
     (void)allowInput;
 }
 
+void TimelinePanel::addLayer(
+    PanelContext const&                ctx,
+    state::editing::model::OverlayKind kind,
+    state::editing::model::ShapeKind   shape,
+    int                                points
+) {
+    auto const* project = ctx.project();
+    if (!project) return;
+    int const tick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+    auto      item = overlays::makeLayer(*project, kind, tick, shape, points);
+    if (kind == state::editing::model::OverlayKind::Model) {
+        auto const file = overlays::pickModelFile();
+        if (!file) return;
+        item.model.file = *file;
+        auto const stem = std::filesystem::path(std::u8string(file->begin(), file->end())).stem().u8string();
+        if (!stem.empty()) item.name = std::string(stem.begin(), stem.end());
+    }
+    auto layers = project->overlays;
+    layers.push_back(item);
+    overlays::commit(ctx, std::move(layers));
+    queueOverlaySelection(item.id);
+}
+
 void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layout, bool allowInput) {
+    using state::editing::model::OverlayKind;
+    using state::editing::model::ShapeKind;
     auto const  project  = ctx.state.project;
     auto*       drawList = ImGui::GetWindowDrawList();
     float const listLeft = layout.fullMin.x;
@@ -675,10 +827,20 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         false,
         ImGuiWindowFlags_NoScrollbar
     );
-    float const controlSize = metrics::iconButton();
-    ImGui::SetCursorPos({metrics::gutter() * 0.5f, std::max(0.0f, (layout.headerHeight - controlSize) * 0.5f)});
-    if (iconButton("timeline-add", ICON_ADD, "playback.refactorEditor.timeline.addTrack"_tr().c_str()))
+    // The add and snap buttons are exactly as tall as the search field, so the band reads as one row of controls.
+    float const controlSize = std::floor(ImGui::GetFrameHeight());
+    float const controlY    = std::max(0.0f, std::floor((layout.headerHeight - controlSize) * 0.5f));
+    float const gap         = std::floor(metrics::gutter() * 0.5f);
+    ImGui::SetCursorPos({gap, controlY});
+    if (widgets::compactIconToggle(
+            "timeline-add",
+            ICON_ADD,
+            "playback.refactorEditor.timeline.addTrack"_tr().c_str(),
+            false,
+            controlSize
+        )) {
         widgets::openAnchoredPopup("##timeline-add-menu");
+    }
     if (widgets::beginAnchoredPopup("##timeline-add-menu")) {
         // An empty name lets the ops layer pick the next free localized default.
         // The action kind picks the track kind: keyframe, first person or third person.
@@ -713,23 +875,46 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             if (!any) ImGui::TextDisabled("%s", "playback.refactorEditor.viewport.noEntityHere"_tr().c_str());
             ImGui::EndMenu();
         }
+        ImGui::Separator();
+        if (ImGui::MenuItem((ICON_TITLE "  " + "playback.refactorEditor.layers.addTitle"_tr()).c_str())) {
+            addLayer(ctx, OverlayKind::Title);
+        }
+        if (ImGui::BeginMenu((ICON_SHAPE "  " + "playback.refactorEditor.layers.addShape"_tr()).c_str())) {
+            if (ImGui::MenuItem((ICON_RECTANGLE "  " + "playback.refactorEditor.layers.rectangle"_tr()).c_str())) {
+                addLayer(ctx, OverlayKind::Shape, ShapeKind::Rectangle);
+            }
+            if (ImGui::MenuItem((ICON_ELLIPSE "  " + "playback.refactorEditor.layers.ellipse"_tr()).c_str())) {
+                addLayer(ctx, OverlayKind::Shape, ShapeKind::Ellipse);
+            }
+            if (ImGui::MenuItem((ICON_TRIANGLE "  " + "playback.refactorEditor.layers.triangle"_tr()).c_str())) {
+                addLayer(ctx, OverlayKind::Shape, ShapeKind::Polygon, 3);
+            }
+            if (ImGui::MenuItem((ICON_POLYGON "  " + "playback.refactorEditor.layers.polygon"_tr()).c_str())) {
+                addLayer(ctx, OverlayKind::Shape, ShapeKind::Polygon, 6);
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem((ICON_MODEL "  " + "playback.refactorEditor.layers.addModel"_tr()).c_str())) {
+            addLayer(ctx, OverlayKind::Model);
+        }
         widgets::endAnchoredPopup();
     }
-    ImGui::SameLine(0.0f, 1.0f);
-    if (iconToggle(
+    ImGui::SameLine(0.0f, gap);
+    ImGui::SetCursorPosY(controlY);
+    if (widgets::compactIconToggle(
             "timeline-snap",
             ICON_TRACK_ACTIVE,
             "playback.refactorEditor.timeline.snapTooltip"_tr().c_str(),
-            mSnapEnabled
+            mSnapEnabled,
+            controlSize
         )) {
         mSnapEnabled = !mSnapEnabled;
     }
-    ImGui::SameLine(0.0f, metrics::gutter() * 0.5f);
-    // The input is frame-height, not button-height; centre it on the same line as the buttons.
-    ImGui::SetCursorPosY(std::max(0.0f, (layout.headerHeight - ImGui::GetFrameHeight()) * 0.5f));
+    ImGui::SameLine(0.0f, gap);
+    ImGui::SetCursorPosY(controlY);
     char search[128]{};
     std::snprintf(search, sizeof(search), "%s", mTrackSearch.c_str());
-    ImGui::SetNextItemWidth(std::max(32.0f, ImGui::GetContentRegionAvail().x - metrics::gutter() * 0.5f));
+    ImGui::SetNextItemWidth(std::max(32.0f, ImGui::GetContentRegionAvail().x - gap));
     if (ImGui::InputTextWithHint(
             "##timeline-search",
             "playback.refactorEditor.timeline.searchTracks"_tr().c_str(),
@@ -751,27 +936,41 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     );
     drawList->PushClipRect({listLeft, layout.bodyTop}, {listLeft + listW, layout.bodyBottom}, true);
 
-    auto const* selectedCamera   = ctx.selection.getAs<state::editing::model::SelectedCamera>();
-    auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
-    float       rowY             = layout.bodyTop - mScrollY;
+    auto const*  selectedCamera   = ctx.selection.getAs<state::editing::model::SelectedCamera>();
+    auto const*  selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
+    auto const*  selectedOverlay  = ctx.selection.getAs<state::editing::model::SelectedOverlay>();
+    bool const   replaySelected   = ctx.selection.getAs<state::editing::model::SelectedWorldActor>()
+                              || ctx.selection.getAs<state::editing::model::SelectedWorldActorSegment>();
+    int const    playheadTick     = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+    ImVec2 const mouse            = ImGui::GetMousePos();
+    bool const   listHovered      = ImGui::IsWindowHovered();
+    float        rowY             = layout.bodyTop - mScrollY;
+    struct {
+        char const* id{};
+        ImVec2      min{};
+        ImVec2      max{};
+    } rowMenu;
     for (auto const& row : mTrackTree.rows()) {
         float const rowBottom = rowY + row.height;
         if (rowBottom < layout.bodyTop || rowY > layout.bodyBottom) {
             rowY = rowBottom;
             continue;
         }
-        bool const selected = !row.cameraId.empty()
-                           && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
-                               || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId));
+        bool const selected =
+            (row.kind == TrackRowKind::Camera
+             && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
+                 || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId)))
+            || (row.kind == TrackRowKind::Overlay && selectedOverlay && selectedOverlay->overlayId == row.overlayId)
+            || (row.kind == TrackRowKind::Replay && replaySelected);
 
         ImGui::SetCursorScreenPos({listLeft, rowY});
         ImGui::InvisibleButton(("##track-row-" + row.id).c_str(), {listW, row.height});
-        bool const  hovered        = ImGui::IsItemHovered();
-        bool const  clicked        = allowInput && ImGui::IsItemClicked(ImGuiMouseButton_Left);
+        bool const  hovered         = ImGui::IsItemHovered();
+        bool const  clicked         = allowInput && ImGui::IsItemClicked(ImGuiMouseButton_Left);
         bool const  rowRightClicked = allowInput && ImGui::IsItemClicked(ImGuiMouseButton_Right);
-        float const selectedAmount = mAnimator.animate("row-selected", row.id, selected ? 1.0f : 0.0f);
-        float const hoverAmount    = mAnimator.animate("row-hover", row.id, hovered ? 1.0f : 0.0f);
-        float const highlight      = std::max(selectedAmount, hoverAmount);
+        float const selectedAmount  = mAnimator.animate("row-selected", row.id, selected ? 1.0f : 0.0f);
+        float const hoverAmount     = mAnimator.animate("row-hover", row.id, hovered ? 1.0f : 0.0f);
+        float const highlight       = std::max(selectedAmount, hoverAmount);
         if (highlight > 0.0f) {
             drawList->AddRectFilled(
                 {listLeft, rowY},
@@ -789,89 +988,262 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 1.0f
             );
         }
-        ImU32 const swatch = row.enabled ? theme::trackColor(row.cameraIndex) : theme::kTrackDisabled;
+        ImU32 const swatch = !row.enabled ? theme::kTrackDisabled
+                           : row.kind == TrackRowKind::World
+                                     || (row.kind == TrackRowKind::Property && row.owner == PropertyOwner::World)
+                               ? theme::kKeyframe
+                           : row.kind == TrackRowKind::Overlay
+                                     || (row.kind == TrackRowKind::Property && row.owner == PropertyOwner::Overlay)
+                               ? layerColor(row.overlayKind)
+                           : row.kind == TrackRowKind::Replay ? theme::kReplayLayer
+                                                              : theme::trackColor(row.cameraIndex);
         drawList->AddRectFilled(
             {listLeft, rowY},
             {listLeft + metrics::trackSwatch(), rowBottom},
             lerpColor(theme::withAlpha(swatch, 0x99), swatch, selectedAmount)
         );
 
-        float const indent = metrics::gutter() + metrics::trackSwatch();
-        float       labelX = listLeft + indent;
-
-        ImU32 const textColor = row.enabled ? theme::kText : theme::kTextDim;
-        std::string const& label = row.name;
-        // Text centres on the fractional row, then the icon centres on the text's optical middle.
-        float const rowCentre = (rowY + rowBottom) * 0.5f;
-        float const textY     = widgets::textYForCentre(rowCentre, label.c_str());
-        float const iconBox   = metrics::iconGlyph();
-        widgets::drawIconAtCentre(
-            drawList,
-            row.trackKind == state::editing::model::CameraTrackKind::Keyframe ? ICON_CAMERA : ICON_USER,
-            {labelX + iconBox * 0.5f, widgets::textInkCentre(textY, label.c_str())},
-            textColor
-        );
-        labelX += iconBox + metrics::gutter() * 0.5f;
-        drawList->AddText({labelX, textY}, textColor, label.c_str());
-
-        if (row.kind == TrackRowKind::Camera) {
-            float const  controlWidth = metrics::iconGlyph();
-            float const  eyeX         = listLeft + listW - controlWidth - metrics::gutter();
-            ImVec2 const mouse        = ImGui::GetMousePos();
-            bool const   eyeHovered   = contains({eyeX, rowY}, {eyeX + controlWidth, rowBottom}, mouse);
-            if (eyeHovered) {
-                widgets::hoverTooltip((row.enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
-                                                   : "playback.refactorEditor.timeline.enableTrack"_tr())
-                                          .c_str());
+        // Every control is one square slot a little shorter than the row, its glyph near the label's size.
+        float const rowCentre = std::floor((rowY + rowBottom) * 0.5f + 0.5f);
+        float const slot      = std::floor(std::min(row.height - 4.0f, metrics::iconButton()));
+        float const glyph     = std::floor(slot * 0.68f);
+        float const slotTop   = rowCentre - std::floor(slot * 0.5f);
+        float       slotRight = std::floor(listLeft + listW - metrics::gutter() * 0.5f);
+        // Laid out right to left; returns true when clicked.
+        auto const control = [&](char const* icon, ImU32 color, char const* tooltip, bool enabled) {
+            ImVec2 const min{slotRight - slot, slotTop};
+            ImVec2 const max{slotRight, slotTop + slot};
+            slotRight -= slot + 2.0f;
+            bool const over = enabled && listHovered && contains(min, max, mouse);
+            if (over) {
+                drawList->AddRectFilled(min, max, theme::withAlpha(theme::kButtonHover, 0xd0), theme::kFrameRounding);
+                widgets::hoverTooltip(tooltip);
             }
-            if (allowInput && eyeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            widgets::drawIconAtCentre(
+                drawList,
+                icon,
+                {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f},
+                !enabled ? theme::withAlpha(theme::kTextDim, 0x80) : over ? theme::kIconHighlight : color,
+                glyph
+            );
+            return allowInput && over && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        };
+        auto const lockControl = [&](bool locked) {
+            return control(
+                locked ? ICON_LOCK : ICON_UNLOCK,
+                locked ? theme::kWarning : theme::withAlpha(theme::kIconInactive, 0x90),
+                (locked ? "playback.refactorEditor.timeline.unlockLayer"_tr()
+                        : "playback.refactorEditor.timeline.lockLayer"_tr())
+                    .c_str(),
+                true
+            );
+        };
+        auto const eyeControl = [&](bool visible) {
+            return control(
+                visible ? ICON_EYE : ICON_HIDE,
+                visible ? theme::kIconInactive : theme::kTextDim,
+                (visible ? "playback.refactorEditor.timeline.disableTrack"_tr()
+                         : "playback.refactorEditor.timeline.enableTrack"_tr())
+                    .c_str(),
+                true
+            );
+        };
+
+        switch (row.kind) {
+        case TrackRowKind::Camera:
+            if (eyeControl(row.enabled)) {
                 EditorAction action{EditorActionType::SetCameraEnabled};
                 action.id    = row.cameraId;
                 action.value = !row.enabled;
                 ctx.submitAction(std::move(action));
             }
-            char const* eyeIcon = row.enabled ? ICON_EYE : ICON_HIDE;
+            if (lockControl(row.locked)) {
+                EditorAction action{EditorActionType::SetCameraLocked};
+                action.id    = row.cameraId;
+                action.value = !row.locked;
+                ctx.submitAction(std::move(action));
+            }
+            // A locked track takes no keys.
+            if (control(
+                    ICON_ADD_KEYFRAME,
+                    theme::kIconInactive,
+                    "playback.refactorEditor.timeline.saveCameraToKeyframe"_tr().c_str(),
+                    !row.locked
+                )) {
+                EditorAction action{EditorActionType::SaveCameraToKeyframe};
+                action.id   = row.cameraId;
+                action.tick = playheadTick;
+                ctx.submitAction(std::move(action));
+            }
+            break;
+        case TrackRowKind::Overlay:
+            if (auto const* item = project ? overlays::find(*project, row.overlayId) : nullptr) {
+                if (eyeControl(item->visible)) {
+                    auto changed    = *item;
+                    changed.visible = !item->visible;
+                    overlays::commitItem(ctx, changed);
+                }
+                if (lockControl(item->locked)) {
+                    auto changed   = *item;
+                    changed.locked = !item->locked;
+                    overlays::commitItem(ctx, changed);
+                }
+            }
+            break;
+        case TrackRowKind::Replay:
+            // The replay has no eye; its lock stays in the same column as every other row's.
+            slotRight -= slot + 2.0f;
+            if (lockControl(row.locked)) {
+                EditorAction action{EditorActionType::SetWorldActorLocked};
+                action.value = !row.locked;
+                ctx.submitAction(std::move(action));
+            }
+            if (control(
+                    ICON_SPLIT,
+                    theme::kIconInactive,
+                    "playback.refactorEditor.timeline.cutAtPlayhead"_tr().c_str(),
+                    !row.locked
+                )) {
+                EditorAction action{EditorActionType::SplitWorldActor};
+                action.tick = playheadTick;
+                ctx.submitAction(std::move(action));
+            }
+            break;
+        case TrackRowKind::Pose:
+        case TrackRowKind::World:
+            break;
+        case TrackRowKind::Property:
+            // ◀ ◆ ▶ as in the inspector: the previous key, a key at the playhead (add or remove), the next key.
+            if (auto const keyed = project ? rowChannel(*project, row) : RowChannel{}; keyed.channel) {
+                int const  local     = playheadTick - keyed.offset;
+                bool const keyedHere = keyed.channel->contains(local);
+                auto const after     = keyed.channel->upper_bound(local);
+                auto const before    = keyed.channel->lower_bound(local);
+                if (control(
+                        ICON_CHEVRON_RIGHT,
+                        theme::kIconInactive,
+                        "playback.refactorEditor.keyframes.next"_tr().c_str(),
+                        after != keyed.channel->end()
+                    )) {
+                    submitSeek(ctx, after->first + keyed.offset);
+                }
+                if (control(
+                        ICON_KEYFRAME,
+                        keyedHere ? theme::kKeyframeSelected : theme::kIconInactive,
+                        (keyedHere ? "playback.refactorEditor.keyframes.removeKey"_tr()
+                                   : "playback.refactorEditor.keyframes.addKey"_tr())
+                            .c_str(),
+                        !row.locked
+                    )) {
+                    float const value = state::editing::model::sampleChannel(*keyed.channel, local).value_or(0.0f);
+                    editChannels(ctx, row.owner, row.ownerId, [&](state::editing::model::ValueChannels& channels) {
+                        auto& channel = channels[row.property];
+                        if (keyedHere) channel.erase(local);
+                        else channel.insert_or_assign(local, state::editing::model::ValueKey{value});
+                    });
+                }
+                if (control(
+                        ICON_CHEVRON_LEFT,
+                        theme::kIconInactive,
+                        "playback.refactorEditor.keyframes.previous"_tr().c_str(),
+                        before != keyed.channel->begin()
+                    )) {
+                    submitSeek(ctx, std::prev(before)->first + keyed.offset);
+                }
+            }
+            break;
+        }
+        bool const overControls = mouse.x >= slotRight;
+
+        // Label: an expand chevron, the kind's glyph and the name, clipped short of the controls. Property rows sit
+        // indented under their owner.
+        auto const* overlayItem = row.kind == TrackRowKind::Overlay && project
+                                    ? overlays::find(*project, row.overlayId)
+                                    : nullptr;
+        char const* kindIcon    = row.kind == TrackRowKind::Property                                 ? nullptr
+                                : row.kind == TrackRowKind::World                                    ? ICON_WORLD
+                                : row.kind == TrackRowKind::Replay                                   ? ICON_FILM
+                                : overlayItem                                                        ? overlays::icon(*overlayItem)
+                                : row.trackKind == state::editing::model::CameraTrackKind::Keyframe ? ICON_CAMERA
+                                                                                                     : ICON_USER;
+        float const indent    = metrics::gutter() + metrics::trackSwatch();
+        float       labelX    = listLeft + indent;
+        ImU32 const textColor = row.enabled ? theme::kText : theme::kTextDim;
+        float const textY     = widgets::textYForCentre(rowCentre, row.name.c_str());
+        float const labelIcon = std::floor(metrics::font() * 1.05f);
+        float const chevron   = std::floor(labelIcon * 0.85f);
+        float const inkCentre = widgets::textInkCentre(textY, row.name.c_str());
+        bool        overChevron = false;
+        if (row.expandable) {
+            ImVec2 const min{labelX - 2.0f, rowY};
+            ImVec2 const max{labelX + chevron + 2.0f, rowBottom};
+            overChevron = listHovered && contains(min, max, mouse);
             widgets::drawIconAtCentre(
                 drawList,
-                eyeIcon,
-                {eyeX + controlWidth * 0.5f, rowCentre},
-                eyeHovered ? theme::kIconHighlight : theme::kIconInactive
+                row.expanded ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT,
+                {labelX + chevron * 0.5f, inkCentre},
+                overChevron ? theme::kIconHighlight : theme::kIconInactive,
+                chevron
             );
-            // The save-key button sits beside the eye; a locked track takes no keys, so its lock shows there instead.
-            float const addX = eyeX - controlWidth;
-            if (row.locked) {
-                widgets::drawIconAtCentre(
-                    drawList,
-                    ICON_LOCK,
-                    {addX + controlWidth * 0.5f, rowCentre},
-                    theme::kTextDim
-                );
-            } else {
-                bool const addHovered = contains({addX, rowY}, {eyeX, rowBottom}, mouse);
-                if (addHovered)
-                    widgets::hoverTooltip("playback.refactorEditor.timeline.saveCameraToKeyframe"_tr().c_str());
-                if (allowInput && addHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    EditorAction action{EditorActionType::SaveCameraToKeyframe};
-                    action.id   = row.cameraId;
-                    action.tick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
-                    ctx.submitAction(std::move(action));
-                }
-                widgets::drawIconAtCentre(
-                    drawList,
-                    ICON_ADD_KEYFRAME,
-                    {addX + controlWidth * 0.5f, rowCentre},
-                    addHovered ? theme::kIconHighlight : theme::kIconInactive
+            if (overChevron) {
+                widgets::hoverTooltip(
+                    (row.expanded ? "playback.refactorEditor.timeline.collapseProperties"_tr()
+                                  : "playback.refactorEditor.timeline.expandProperties"_tr())
+                        .c_str()
                 );
             }
-            if (clicked && mouse.x < addX) {
-                ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
-                EditorAction action{EditorActionType::SetPreviewCamera};
-                action.id = row.cameraId;
-                ctx.submitAction(std::move(action));
-            } else if (rowRightClicked && mouse.x < addX) {
-                ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
-                mTrackMenuCameraId = row.cameraId;
-                widgets::openAnchoredPopup("##timeline-track-menu");
+            if (overChevron && clicked) {
+                if (row.expanded) mExpandedRows.erase(row.id);
+                else mExpandedRows.insert(row.id);
+            }
+        }
+        labelX += chevron + metrics::gutter() * 0.25f;
+        if (kindIcon) {
+            widgets::drawIconAtCentre(drawList, kindIcon, {labelX + labelIcon * 0.5f, inkCentre}, textColor, labelIcon);
+        }
+        labelX += labelIcon + metrics::gutter() * 0.5f;
+        ImVec4 const clip{labelX, rowY, std::max(labelX, slotRight - 2.0f), rowBottom};
+        drawList->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            {labelX, textY},
+            textColor,
+            row.name.c_str(),
+            nullptr,
+            0.0f,
+            &clip
+        );
+
+        if (!overControls && !overChevron) {
+            switch (row.kind) {
+            case TrackRowKind::Camera:
+                if (clicked) {
+                    ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
+                    EditorAction action{EditorActionType::SetPreviewCamera};
+                    action.id = row.cameraId;
+                    ctx.submitAction(std::move(action));
+                } else if (rowRightClicked) {
+                    ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
+                    mTrackMenuCameraId = row.cameraId;
+                    rowMenu = {"##timeline-track-menu", ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+                }
+                break;
+            case TrackRowKind::Overlay:
+                if (clicked || rowRightClicked) {
+                    ctx.selection.select(state::editing::model::SelectedOverlay{row.overlayId});
+                }
+                if (rowRightClicked) {
+                    mOverlayMenuId = row.overlayId;
+                    rowMenu = {"##timeline-overlay-menu", ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+                }
+                break;
+            case TrackRowKind::Replay:
+                if (clicked || rowRightClicked) ctx.selection.select(state::editing::model::SelectedWorldActor{});
+                break;
+            case TrackRowKind::Pose:
+            case TrackRowKind::World:
+            case TrackRowKind::Property:
+                break;
             }
         }
         rowY = rowBottom;
@@ -879,6 +1251,8 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     drawList->PopClipRect();
     ImGui::EndChild();
     ImGui::PopStyleVar();
+    // Popups are scoped to the window that opens them; the menus are drawn by the timeline window, not this list.
+    if (rowMenu.id) widgets::openAnchoredPopup(rowMenu.id, rowMenu.min, rowMenu.max);
 
     drawList->AddLine({listLeft + listW, layout.rulerTop}, {listLeft + listW, layout.fullMax.y}, theme::kLine);
 }
@@ -1429,6 +1803,123 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
     }
 }
 
+void TimelinePanel::drawLayerMenus(PanelContext const& ctx) {
+    auto const* project = ctx.project();
+    if (!project) return;
+
+    if (widgets::beginAnchoredPopup("##timeline-overlay-menu")) {
+        auto const* item = overlays::find(*project, mOverlayMenuId);
+        if (!item) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            auto const index = static_cast<size_t>(item - project->overlays.data());
+            auto const reorder = [&](size_t to) {
+                auto layers = project->overlays;
+                auto moved  = layers[index];
+                layers.erase(layers.begin() + static_cast<std::ptrdiff_t>(index));
+                layers.insert(layers.begin() + static_cast<std::ptrdiff_t>(to), std::move(moved));
+                overlays::commit(ctx, std::move(layers));
+            };
+            if (ImGui::MenuItem("playback.refactorEditor.layers.duplicate"_tr().c_str())) {
+                auto copy = overlays::makeLayer(*project, item->kind, item->startTick, item->shape.kind, item->shape.points);
+                auto const id   = copy.id;
+                auto const name = copy.name;
+                copy            = *item;
+                copy.id         = id;
+                copy.name       = name;
+                copy.locked     = false;
+                auto layers     = project->overlays;
+                layers.insert(layers.begin() + static_cast<std::ptrdiff_t>(index) + 1, copy);
+                overlays::commit(ctx, std::move(layers));
+                queueOverlaySelection(id);
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.layers.bringForward"_tr().c_str(),
+                    nullptr,
+                    false,
+                    index + 1 < project->overlays.size()
+                )) {
+                reorder(index + 1);
+            }
+            if (ImGui::MenuItem("playback.refactorEditor.layers.sendBackward"_tr().c_str(), nullptr, false, index > 0)) {
+                reorder(index - 1);
+            }
+            if (ImGui::MenuItem("playback.refactorEditor.layers.trimToPlayhead"_tr().c_str(), nullptr, false, !item->locked)) {
+                // Ends the layer at the playhead, or starts it there when the playhead is before it.
+                auto changed = *item;
+                int const tick = ctx.state.currentTick;
+                if (tick > item->startTick) changed.endTick = tick;
+                else if (tick < item->endTick) state::editing::model::setOverlayStart(changed, tick);
+                overlays::commitItem(ctx, changed);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    (item->locked ? "playback.refactorEditor.timeline.unlockLayer"_tr()
+                                  : "playback.refactorEditor.timeline.lockLayer"_tr())
+                        .c_str()
+                )) {
+                auto changed   = *item;
+                changed.locked = !item->locked;
+                overlays::commitItem(ctx, changed);
+            }
+            if (ImGui::MenuItem("playback.refactorEditor.layers.delete"_tr().c_str(), "Del", false, !item->locked)) {
+                auto layers = project->overlays;
+                layers.erase(layers.begin() + static_cast<std::ptrdiff_t>(index));
+                overlays::commit(ctx, std::move(layers));
+                ctx.selection.clear();
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-segment-menu")) {
+        auto const& segments = project->worldActor.segments;
+        auto const  segment  = std::ranges::find(segments, mSegmentMenuId, &state::editing::model::WorldActorSegment::id);
+        if (segment == segments.end()) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            int const  playhead = ctx.state.currentTick;
+            bool const canSplitAtPlayhead =
+                !segment->locked && playhead > segment->startTick && playhead < segment->endTick;
+            bool const canSplitHere =
+                !segment->locked && mSegmentMenuTick > segment->startTick && mSegmentMenuTick < segment->endTick;
+            if (ImGui::MenuItem("playback.refactorEditor.timeline.cutAtPlayhead"_tr().c_str(), nullptr, false, canSplitAtPlayhead)) {
+                EditorAction action{EditorActionType::SplitWorldActor};
+                action.tick = playhead;
+                ctx.submitAction(std::move(action));
+            }
+            if (ImGui::MenuItem("playback.refactorEditor.timeline.cutHere"_tr().c_str(), nullptr, false, canSplitHere)) {
+                EditorAction action{EditorActionType::SplitWorldActor};
+                action.tick = mSegmentMenuTick;
+                ctx.submitAction(std::move(action));
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.details.cutSegment"_tr().c_str(),
+                    "Del",
+                    false,
+                    !segment->locked && segments.size() > 1
+                )) {
+                EditorAction action{EditorActionType::DeleteWorldActorSegment};
+                action.id = segment->id;
+                ctx.submitAction(std::move(action));
+                ctx.selection.clear();
+            }
+            ImGui::Separator();
+            bool const locked = segment->locked;
+            if (ImGui::MenuItem(
+                    (locked ? "playback.refactorEditor.timeline.unlockLayer"_tr()
+                            : "playback.refactorEditor.timeline.lockLayer"_tr())
+                        .c_str()
+                )) {
+                EditorAction action{EditorActionType::SetWorldActorLocked};
+                action.value = !locked;
+                ctx.submitAction(std::move(action));
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+}
+
 void TimelinePanel::drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput) {
     auto const& state     = ctx.state;
     auto*       drawList  = ImGui::GetWindowDrawList();
@@ -1580,13 +2071,15 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mMarkerDragMoved = false;
         mPoseDragId.clear();
         mPoseDragMoved = false;
+        mClipDragId.clear();
+        mClipDragMoved = false;
     }
     mSnapGuideTick = -1;
     applyPendingSelection(ctx);
 
     mAnimator.beginFrame();
     mTrackTree.setSearch(mTrackSearch);
-    mTrackTree.rebuild(*project);
+    mTrackTree.rebuild(*project, mExpandedRows);
     int displayTick = mPendingSeekTick >= 0 ? mPendingSeekTick : state.currentTick;
     if (mRulerDragTick >= 0) displayTick = mRulerDragTick;
     if (mPendingSeekTick >= 0 && state.currentTick == mPendingSeekTick) mPendingSeekTick = -1;
@@ -1818,7 +2311,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         drawList->AddLine({layout.canvasLeft, rowBottom}, {layout.fullMax.x, rowBottom}, IM_COL32(0, 0, 0, 64));
         ++bandIndex;
 
-        if (row.cameraIndex >= 0 && row.cameraIndex < static_cast<int>(project->cameras.size())) {
+        if (row.kind == TrackRowKind::Camera && row.cameraIndex >= 0
+            && row.cameraIndex < static_cast<int>(project->cameras.size())) {
             auto const& camera = project->cameras[row.cameraIndex];
             bool const  cameraSelected =
                 (ctx.selection.getAs<state::editing::model::SelectedCamera>()
@@ -2017,12 +2511,160 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 widgets::openAnchoredPopup("##timeline-pose-lane-menu", {anchorX, y + 3.0f}, {anchorX, rowBottom - 3.0f});
             }
         }
+        // Layer and replay bars: the body moves a layer, an edge trims a layer or a replay segment.
+        if (row.kind == TrackRowKind::Overlay || row.kind == TrackRowKind::Replay) {
+            bool const   replayLane = row.kind == TrackRowKind::Replay;
+            ImVec2 const mouse      = ImGui::GetMousePos();
+            float const  edgeGrab   = kEdgeGrabPixels * metrics::scale();
+            float const  barTop     = y + 3.0f;
+            float const  barBottom  = rowBottom - 3.0f;
+            auto const   barHit     = [&](float x0, float x1, std::string const& id, int start, int end, bool locked) {
+                if (!allowInput || clickConsumed || mouse.y < barTop || mouse.y > barBottom) return;
+                if (mouse.x < x0 - edgeGrab * 0.5f || mouse.x > x1 + edgeGrab * 0.5f) return;
+                int const mode = !locked && std::abs(mouse.x - x0) <= edgeGrab   ? 1
+                               : !locked && std::abs(mouse.x - x1) <= edgeGrab   ? 2
+                                                                                 : 0;
+                if (mode != 0 && mClipDragId.empty()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                bool const left  = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+                bool const right = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+                if (!left && !right) return;
+                clickConsumed = true;
+                if (replayLane) ctx.selection.select(state::editing::model::SelectedWorldActorSegment{id});
+                else ctx.selection.select(state::editing::model::SelectedOverlay{id});
+                if (right) {
+                    float const anchorX = std::clamp(mouse.x, x0, x1);
+                    if (replayLane) {
+                        mSegmentMenuId   = id;
+                        mSegmentMenuTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                        widgets::openAnchoredPopup("##timeline-segment-menu", {anchorX, barTop}, {anchorX, barBottom});
+                    } else {
+                        mOverlayMenuId = id;
+                        widgets::openAnchoredPopup("##timeline-overlay-menu", {anchorX, barTop}, {anchorX, barBottom});
+                    }
+                    return;
+                }
+                // Replay segments play where they sit, so only their edges move; a click on one seeks there.
+                if (locked && !replayLane) return;
+                mClipDragId          = id;
+                mClipDragReplay      = replayLane;
+                mClipDragMode        = replayLane && (locked || mode == 0) ? -1 : mode;
+                mClipDragStartX      = mouse.x;
+                mClipDragOriginStart = mClipDragStart = start;
+                mClipDragOriginEnd   = mClipDragEnd   = end;
+                mClipDragMoved       = false;
+            };
+            auto const shown = [&](std::string const& id, int start, int end) {
+                return mClipDragId == id && mClipDragMoved ? std::pair{mClipDragStart, mClipDragEnd} : std::pair{start, end};
+            };
+
+            if (replayLane) {
+                auto const* selectedSegment = ctx.selection.getAs<state::editing::model::SelectedWorldActorSegment>();
+                // A cut is the empty stretch between two segments; it is hatched so it reads as removed.
+                int lastEnd = 0;
+                for (auto const& segment : project->worldActor.segments) {
+                    auto const [start, end] = shown(segment.id, segment.startTick, segment.endTick);
+                    if (start > lastEnd) {
+                        float const gapLeft  = std::max(scale.xAt(static_cast<float>(lastEnd)), layout.canvasLeft);
+                        float const gapRight = std::min(scale.xAt(static_cast<float>(start)), layout.fullMax.x);
+                        for (float hatch = gapLeft - (barBottom - barTop); hatch < gapRight; hatch += 8.0f) {
+                            float const x0 = std::max(hatch, gapLeft);
+                            float const x1 = std::min(hatch + (barBottom - barTop), gapRight);
+                            if (x1 <= x0) continue;
+                            drawList->AddLine(
+                                {x0, barBottom - (x0 - hatch)},
+                                {x1, barBottom - (x1 - hatch)},
+                                theme::withAlpha(theme::kReplayLayer, 0x40)
+                            );
+                        }
+                    }
+                    lastEnd = std::max(lastEnd, end);
+                    float const x0 = scale.xAt(static_cast<float>(start));
+                    float const x1 = scale.xAt(static_cast<float>(end));
+                    drawLaneBar(
+                        drawList,
+                        {x0, barTop},
+                        {x1, barBottom},
+                        segment.locked ? theme::kTrackDisabled : theme::kReplayLayer,
+                        selectedSegment && selectedSegment->segmentId == segment.id,
+                        false,
+                        segment.locked ? ICON_LOCK : ICON_FILM,
+                        formatTick(start).c_str(),
+                        layout.canvasLeft,
+                        layout.fullMax.x
+                    );
+                    barHit(x0, x1, segment.id, segment.startTick, segment.endTick, segment.locked);
+                }
+            } else if (auto const* item = overlays::find(*project, row.overlayId)) {
+                auto const* selectedLayer = ctx.selection.getAs<state::editing::model::SelectedOverlay>();
+                auto const [start, end]   = shown(item->id, item->startTick, item->endTick);
+                float const x0            = scale.xAt(static_cast<float>(start));
+                float const x1            = scale.xAt(static_cast<float>(end));
+                drawLaneBar(
+                    drawList,
+                    {x0, barTop},
+                    {x1, barBottom},
+                    layerColor(item->kind),
+                    selectedLayer && selectedLayer->overlayId == item->id,
+                    !item->visible,
+                    item->locked ? ICON_LOCK : overlays::icon(*item),
+                    item->kind == state::editing::model::OverlayKind::Title && !item->title.text.empty()
+                        ? item->title.text.c_str()
+                        : item->name.c_str(),
+                    layout.canvasLeft,
+                    layout.fullMax.x
+                );
+                barHit(x0, x1, item->id, item->startTick, item->endTick, item->locked);
+            }
+            // The rest of the lane only seeks; a box select there would select nothing.
+            if (allowInput && !clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+                && contains({layout.canvasLeft, barTop}, {layout.fullMax.x, barBottom}, mouse)) {
+                clickConsumed = true;
+                submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
+            }
+        }
+        if (row.kind == TrackRowKind::Property) {
+            drawPropertyLane(ctx, row, layout, scale, y, rowBottom, allowInput, clickConsumed);
+        }
+        // Keyed properties of a row that is not expanded show as small marks along its foot; the World row shows
+        // every World key on its centre line, and a click there seeks.
+        if (row.kind == TrackRowKind::World || (row.expandable && !row.expanded)) {
+            state::editing::model::ValueChannels const* channels = nullptr;
+            int                                         offset   = 0;
+            if (row.kind == TrackRowKind::World) {
+                channels = &project->world.channels;
+            } else if (row.kind == TrackRowKind::Camera && row.cameraIndex >= 0
+                       && row.cameraIndex < static_cast<int>(project->cameras.size())) {
+                channels = &project->cameras[static_cast<size_t>(row.cameraIndex)].channels;
+            } else if (auto const* item = row.kind == TrackRowKind::Overlay ? overlays::find(*project, row.overlayId)
+                                                                            : nullptr) {
+                channels = &item->channels;
+                offset   = item->startTick;
+            }
+            bool const  world  = row.kind == TrackRowKind::World;
+            float const markY  = world ? centerY : rowBottom - keyRadius * 0.7f - 2.0f;
+            float const radius = world ? keyRadius : keyRadius * 0.6f;
+            if (channels) {
+                for (int tick : keyTicks(*channels, offset)) {
+                    float const x = scale.xAt(static_cast<float>(tick));
+                    if (x < layout.canvasLeft - radius || x > layout.fullMax.x + radius) continue;
+                    drawKeyframeDiamond(drawList, x, markY, radius, theme::kKeyframe, theme::kKeyframeOutline);
+                }
+            }
+            ImVec2 const mouse = ImGui::GetMousePos();
+            if (world && allowInput && !clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+                && contains({layout.canvasLeft, y}, {layout.fullMax.x, rowBottom}, mouse)) {
+                clickConsumed = true;
+                submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
+            }
+        }
         y = rowBottom;
     }
 
     drawTrackGrid(ctx, layout, scale);
     drawExportRange(ctx, layout, scale, allowInput);
     drawContextMenus(ctx);
+    drawLayerMenus(ctx);
+    drawChannelKeyMenu(ctx);
 
     // Shift snaps a drag onto nearby edit points; otherwise the whole-second grid applies when enabled.
     bool const shiftSnap  = ImGui::GetIO().KeyShift;
@@ -2030,6 +2672,45 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         int const raw = tickFromMouse();
         return shiftSnap ? snapToEditPoints(ctx, raw, scale.pixelsPerTick, true, true, skipKey, {}) : snapTick(raw);
     };
+
+    // A property key follows the mouse while held and lands on release; a click without movement seeks to it.
+    if (allowInput && !mChannelDragRow.empty()) {
+        auto const& rows = mTrackTree.rows();
+        auto const  row  = std::ranges::find(rows, mChannelDragRow, &TrackTreeRow::id);
+        if (row == rows.end()) {
+            mChannelDragRow.clear();
+        } else {
+            if (std::abs(ImGui::GetMousePos().x - mChannelDragStartX) >= 2.0f) mChannelDragMoved = true;
+            if (mChannelDragMoved) {
+                int const target   = std::clamp(dragTarget([](std::string const&, int) { return false; }), 0, state.totalTicks);
+                mChannelDragTick   = target - mChannelDragOffset;
+                float const guideX = scale.xAt(static_cast<float>(target));
+                drawList->AddLine(
+                    {guideX, layout.bodyTop},
+                    {guideX, layout.bodyBottom},
+                    theme::withAlpha(theme::kKeyframeSelected, 180),
+                    1.0f
+                );
+            }
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (!mChannelDragMoved) {
+                    submitSeek(ctx, mChannelDragKey + mChannelDragOffset);
+                } else if (mChannelDragTick != mChannelDragKey) {
+                    int const         from     = mChannelDragKey;
+                    int const         to       = mChannelDragTick;
+                    std::string const property = row->property;
+                    editChannels(ctx, row->owner, row->ownerId, [&](state::editing::model::ValueChannels& channels) {
+                        auto& channel = channels[property];
+                        auto  moved   = channel.extract(from);
+                        if (!moved) return;
+                        channel.insert_or_assign(to, moved.mapped());
+                    });
+                }
+                mChannelDragRow.clear();
+                mChannelDragMoved = false;
+            }
+        }
+    }
 
     if (allowInput && mGroupDrag) {
         if (ImGui::GetMousePos().x != mDraggingKeyframeStartMouseX) mDraggingKeyframeMoved = true;
@@ -2118,6 +2799,67 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             mDraggingKeyframeCameraId.clear();
             mDraggingKeyframeStartTick = -1;
             mDraggingKeyframeMoved     = false;
+        }
+    }
+
+    if (allowInput && !mClipDragId.empty()) {
+        if (std::abs(ImGui::GetMousePos().x - mClipDragStartX) >= 2.0f) mClipDragMoved = true;
+        // A replay segment may only grow into the gaps beside it; a layer anywhere in the replay.
+        int minTick = 0;
+        int maxTick = state.totalTicks;
+        if (mClipDragReplay) {
+            auto const& segments = project->worldActor.segments;
+            auto const  it       = std::ranges::find(segments, mClipDragId, &state::editing::model::WorldActorSegment::id);
+            if (it == segments.end()) {
+                mClipDragId.clear();
+            } else {
+                if (it != segments.begin()) minTick = std::prev(it)->endTick;
+                if (std::next(it) != segments.end()) maxTick = std::next(it)->startTick;
+            }
+        } else if (!overlays::find(*project, mClipDragId)) {
+            mClipDragId.clear();
+        }
+        if (!mClipDragId.empty() && mClipDragMoved && mClipDragMode >= 0) {
+            int const target = dragTarget([](std::string const&, int) { return false; });
+            int const length = mClipDragOriginEnd - mClipDragOriginStart;
+            if (mClipDragMode == 0) {
+                int const delta = target - std::clamp(scale.tickAt(mClipDragStartX), 0, state.totalTicks);
+                mClipDragStart  = std::clamp(mClipDragOriginStart + delta, minTick, std::max(minTick, maxTick - length));
+                mClipDragEnd    = mClipDragStart + length;
+            } else if (mClipDragMode == 1) {
+                mClipDragStart = std::clamp(target, minTick, mClipDragOriginEnd - 1);
+            } else {
+                mClipDragEnd = std::clamp(target, mClipDragOriginStart + 1, maxTick);
+            }
+            float const guideX = scale.xAt(static_cast<float>(mClipDragMode == 2 ? mClipDragEnd : mClipDragStart));
+            drawList->AddLine(
+                {guideX, layout.bodyTop},
+                {guideX, layout.bodyBottom},
+                theme::withAlpha(theme::kKeyframeSelected, 180),
+                1.0f
+            );
+            ImGui::SetMouseCursor(mClipDragMode == 0 ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_ResizeEW);
+        }
+        if (!mClipDragId.empty() && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            bool const changed = mClipDragStart != mClipDragOriginStart || mClipDragEnd != mClipDragOriginEnd;
+            if (!mClipDragMoved || mClipDragMode < 0) {
+                submitSeek(ctx, std::clamp(scale.tickAt(mClipDragStartX), 0, state.totalTicks));
+            } else if (changed && mClipDragReplay) {
+                EditorAction action{EditorActionType::TrimWorldActor};
+                action.id   = mClipDragId;
+                action.tick = mClipDragStart;
+                action.kind = mClipDragEnd;
+                ctx.submitAction(std::move(action));
+            } else if (changed) {
+                auto item = *overlays::find(*project, mClipDragId);
+                // A move carries the keys along; a start trim leaves them where they are on the timeline.
+                if (mClipDragMode == 1) state::editing::model::setOverlayStart(item, mClipDragStart);
+                else item.startTick = mClipDragStart;
+                item.endTick = mClipDragEnd;
+                overlays::commitItem(ctx, item);
+            }
+            mClipDragId.clear();
+            mClipDragMoved = false;
         }
     }
 
@@ -2270,6 +3012,205 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     }
 
     drawRangeBar(ctx, layout, allowInput);
+}
+
+void TimelinePanel::editChannels(
+    PanelContext const&                                                ctx,
+    PropertyOwner                                                      owner,
+    std::string const&                                                 ownerId,
+    std::function<void(state::editing::model::ValueChannels&)> const& edit
+) {
+    auto const* project = ctx.project();
+    if (!project) return;
+    switch (owner) {
+    case PropertyOwner::Camera: {
+        auto const camera = std::ranges::find(project->cameras, ownerId, &state::editing::model::CameraEntity::id);
+        if (camera == project->cameras.end() || camera->locked) return;
+        auto properties = state::editing::model::cameraProperties(*camera);
+        edit(properties.channels);
+        state::editing::model::pruneChannels(properties.channels);
+        EditorAction action{EditorActionType::SetCameraProperties};
+        action.id               = ownerId;
+        action.cameraProperties = std::move(properties);
+        ctx.submitAction(std::move(action));
+        break;
+    }
+    case PropertyOwner::Overlay: {
+        auto const* stored = overlays::find(*project, ownerId);
+        if (!stored || stored->locked) return;
+        auto item = *stored;
+        edit(item.channels);
+        state::editing::model::pruneChannels(item.channels);
+        overlays::commitItem(ctx, item);
+        break;
+    }
+    case PropertyOwner::World: {
+        auto world = project->world;
+        edit(world.channels);
+        state::editing::model::pruneChannels(world.channels);
+        EditorAction action{EditorActionType::SetWorldSettings};
+        action.worldSettings = std::move(world);
+        ctx.submitAction(std::move(action));
+        break;
+    }
+    }
+}
+
+void TimelinePanel::drawPropertyLane(
+    PanelContext const&  ctx,
+    TrackTreeRow const&  row,
+    Layout const&        layout,
+    TimelineScale const& scale,
+    float                top,
+    float                bottom,
+    bool                 allowInput,
+    bool&                clickConsumed
+) {
+    using state::editing::model::KeyEasing;
+    using state::editing::model::ValueChannel;
+    auto const* project = ctx.project();
+    if (!project) return;
+    auto const keyed = rowChannel(*project, row);
+    if (!keyed.channel) return;
+    auto* const drawList  = ImGui::GetWindowDrawList();
+    float const keyRadius = metrics::keyframeRadius();
+    ImU32 const color     = row.owner == PropertyOwner::World   ? theme::kKeyframe
+                          : row.owner == PropertyOwner::Overlay ? layerColor(row.overlayKind)
+                                                                : theme::trackColor(row.cameraIndex);
+
+    // A key being dragged is drawn, and the curve follows it, where it would land.
+    ValueChannel channel = *keyed.channel;
+    bool const   dragged = mChannelDragRow == row.id && mChannelDragMoved;
+    if (dragged) {
+        if (auto moved = channel.extract(mChannelDragKey)) channel.insert_or_assign(mChannelDragTick, moved.mapped());
+    }
+
+    // The curve spans the keys' range of values with a little air above and below.
+    auto const [lowest, highest] = std::ranges::minmax(channel | std::views::values | std::views::transform(&state::editing::model::ValueKey::value));
+    float low  = lowest;
+    float high = highest;
+    if (high - low < 1e-4f) {
+        low  -= 1.0f;
+        high += 1.0f;
+    }
+    float const laneTop    = top + 5.0f;
+    float const laneBottom = bottom - 5.0f;
+    auto const  yOf        = [&](float value) {
+        return laneBottom - (value - low) / (high - low) * (laneBottom - laneTop);
+    };
+
+    // A layer's keys only act while it is on screen; outside that stretch the lane is dimmed.
+    float const spanLeft  = std::max(layout.canvasLeft, scale.xAt(0.0f));
+    float const spanRight = std::min(layout.fullMax.x, scale.xAt(static_cast<float>(project->totalTicks)));
+    if (row.owner == PropertyOwner::Overlay) {
+        if (auto const* item = overlays::find(*project, row.ownerId)) {
+            float const x0 = std::max(spanLeft, scale.xAt(static_cast<float>(item->startTick)));
+            float const x1 = std::min(spanRight, scale.xAt(static_cast<float>(item->endTick)));
+            if (x1 > x0) drawList->AddRectFilled({x0, top + 2.0f}, {x1, bottom - 2.0f}, theme::withAlpha(color, 0x18));
+        }
+    }
+    drawList->AddLine({spanLeft, laneBottom}, {spanRight, laneBottom}, theme::withAlpha(theme::kLine, 0x80));
+
+    std::vector<ImVec2> points;
+    float const         step = 3.0f;
+    for (float x = spanLeft; x <= spanRight + step * 0.5f; x += step) {
+        float const  px    = std::min(x, spanRight);
+        double const tick  = scale.tickAtExact(px) - keyed.offset;
+        float const  value = state::editing::model::sampleChannel(channel, tick).value_or(low);
+        points.push_back({px, yOf(value)});
+    }
+    if (points.size() >= 2) {
+        drawList->AddPolyline(points.data(), static_cast<int>(points.size()), theme::withAlpha(color, 0xd0), 0, 1.5f);
+    }
+
+    // Keys: diamonds on the curve (squares hold), each draggable along the timeline.
+    ImVec2 const mouse   = ImGui::GetMousePos();
+    bool const   editable = !row.locked;
+    for (auto const& [tick, key] : channel) {
+        float const x = scale.xAt(static_cast<float>(tick + keyed.offset));
+        if (x < layout.canvasLeft - keyRadius || x > layout.fullMax.x + keyRadius) continue;
+        float const keyY     = std::clamp(yOf(key.value), top + keyRadius, bottom - keyRadius);
+        bool const  active   = (dragged && tick == mChannelDragTick) || (mChannelMenuRow == row.id && mChannelMenuKey == tick);
+        bool const  over     = std::abs(mouse.x - x) <= keyRadius + 3.0f && std::abs(mouse.y - keyY) <= keyRadius + 4.0f;
+        ImU32 const fill     = active || over ? theme::kKeyframeSelected : theme::kKeyframe;
+        ImU32 const outline  = active ? theme::kIconHighlight : theme::kKeyframeOutline;
+        if (key.easing == KeyEasing::Hold) drawKeyframeSquare(drawList, x, keyY, keyRadius, fill, outline);
+        else drawKeyframeDiamond(drawList, x, keyY, keyRadius, fill, outline);
+        if (over && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+            widgets::hoverTooltip(
+                (formatTick(tick + keyed.offset) + "  " + std::format("{:.3g}", key.value) + "  ·  "
+                 + keyframes::easingName(key.easing))
+                    .c_str()
+            );
+        }
+        if (!allowInput || clickConsumed || !over) continue;
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            clickConsumed   = true;
+            mChannelMenuRow = row.id;
+            mChannelMenuKey = tick;
+            widgets::openAnchoredPopup(
+                "##timeline-channel-key-menu",
+                {x - keyRadius, keyY - keyRadius},
+                {x + keyRadius, keyY + keyRadius}
+            );
+        } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            clickConsumed = true;
+            if (!editable) {
+                submitSeek(ctx, tick + keyed.offset);
+                continue;
+            }
+            mChannelDragRow    = row.id;
+            mChannelDragKey    = tick;
+            mChannelDragTick   = tick;
+            mChannelDragOffset = keyed.offset;
+            mChannelDragStartX = mouse.x;
+            mChannelDragMoved  = false;
+        }
+    }
+    // Elsewhere on the lane a click seeks, as on any other lane.
+    if (allowInput && !clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+        && contains({layout.canvasLeft, top}, {layout.fullMax.x, bottom}, mouse)) {
+        clickConsumed = true;
+        submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, project->totalTicks));
+    }
+}
+
+void TimelinePanel::drawChannelKeyMenu(PanelContext const& ctx) {
+    if (!widgets::beginAnchoredPopup("##timeline-channel-key-menu")) return;
+    auto const& rows = mTrackTree.rows();
+    auto const  row  = std::ranges::find(rows, mChannelMenuRow, &TrackTreeRow::id);
+    auto const* project = ctx.project();
+    auto const  keyed   = row != rows.end() && project ? rowChannel(*project, *row) : RowChannel{};
+    if (!keyed.channel || !keyed.channel->contains(mChannelMenuKey)) {
+        ImGui::CloseCurrentPopup();
+        widgets::endAnchoredPopup();
+        return;
+    }
+    int const         tick     = mChannelMenuKey;
+    auto const        current  = keyed.channel->at(tick).easing;
+    std::string const property = row->property;
+    ImGui::TextDisabled("%s  %s", row->name.c_str(), formatTick(tick + keyed.offset).c_str());
+    ImGui::Separator();
+    ImGui::BeginDisabled(row->locked);
+    // How the value travels from this key to the next.
+    for (int index = 0; index <= static_cast<int>(state::editing::model::KeyEasing::Hold); ++index) {
+        auto const easing = static_cast<state::editing::model::KeyEasing>(index);
+        if (ImGui::MenuItem(keyframes::easingName(easing).c_str(), nullptr, current == easing)) {
+            editChannels(ctx, row->owner, row->ownerId, [&](state::editing::model::ValueChannels& channels) {
+                channels[property][tick].easing = easing;
+            });
+        }
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("playback.refactorEditor.keyframes.seekToKey"_tr().c_str())) submitSeek(ctx, tick + keyed.offset);
+    if (ImGui::MenuItem("playback.refactorEditor.keyframes.deleteKey"_tr().c_str(), "Del")) {
+        editChannels(ctx, row->owner, row->ownerId, [&](state::editing::model::ValueChannels& channels) {
+            channels[property].erase(tick);
+        });
+        mChannelMenuRow.clear();
+    }
+    ImGui::EndDisabled();
+    widgets::endAnchoredPopup();
 }
 
 } // namespace playback::editor::ui
