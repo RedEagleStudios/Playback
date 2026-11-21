@@ -1837,79 +1837,92 @@ void DetailsPanel::drawShakeSection(PanelContext const& ctx, state::editing::mod
     ImGui::BeginDisabled(camera.locked);
     row("fov", ICON_FOV, "playback.refactorEditor.details.fov"_tr(), Property::Fov, properties.fov, 1.0f, 179.0f, "%.1f°");
 
-    // Keys the whole shake at the playhead in one click, as it is now.
-    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shake"_tr().c_str());
-    ImGui::SameLine();
-    auto const shakeNames = {
-        Property::ShakeStrength,
-        Property::ShakeFrequency,
-        Property::ShakePosition,
-        Property::ShakeRotation,
-        Property::ShakeRoll,
+    // The shake keys as one: a shake key holds all five values, so the header carries the only diamond and an edit to
+    // any of them keys the whole shake at the playhead.
+    auto const staticOf = [&](std::string_view name) -> float& {
+        if (name == Property::ShakeStrength) return properties.shakeStrength;
+        if (name == Property::ShakeFrequency) return properties.shakeFrequency;
+        if (name == Property::ShakePosition) return properties.shake.positionAmount;
+        if (name == Property::ShakeRotation) return properties.shake.rotationAmount;
+        return properties.shake.rollAmount;
     };
-    bool const shakeKeyedHere = std::ranges::all_of(shakeNames, [&](char const* name) {
+    auto const valueAt = [&](std::string const& name) {
         auto const channel = properties.channels.find(name);
-        return channel != properties.channels.end() && channel->second.contains(tick);
-    });
-    bool const shakeKeyed = std::ranges::any_of(shakeNames, [&](char const* name) {
-        return editing::model::hasKeys(properties.channels, name);
-    });
-    if (keyframes::diamondButton(
-            "##key-shake",
-            shakeKeyedHere,
-            shakeKeyed,
-            "playback.refactorEditor.details.keyShake"_tr().c_str()
-        )) {
-        auto probe = camera;
-        editing::model::setCameraProperties(probe, properties);
-        keyframes::toggleKeys(properties.channels, shakeNames, tick, [&](char const* name) {
-            return editing::model::cameraPropertyAt(probe, name, tick);
-        });
-        clicked = true;
-    }
+        if (channel == properties.channels.end() || channel->second.empty()) return staticOf(name);
+        return editing::model::sampleChannel(channel->second, tick).value_or(staticOf(name));
+    };
+    std::vector<std::string> const shakeNames(Property::ShakeMembers.begin(), Property::ShakeMembers.end());
+    auto const header = keyframes::groupHeader(
+        "shake",
+        nullptr,
+        "playback.refactorEditor.details.shake"_tr(),
+        properties.channels,
+        shakeNames,
+        tick,
+        valueAt
+    );
+    if (header.seek) ctx.commands.seekTo(*header.seek);
+    if (header.changed && !ImGui::IsAnyItemActive()) clicked = true;
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeHint"_tr().c_str());
     ImGui::PopTextWrapPos();
-    row("strength",
+    auto const shakeField = [&](char const* id, char const* icon, std::string const& label, char const* name,
+                                float low, float high, char const* format) {
+        widgets::fieldLabel(icon, label.c_str());
+        float value = valueAt(name);
+        if (!widgets::dragFloat(id, &value, low, high, format)) return;
+        // Keys every shake value at the playhead, the others as they stand there, so the shake stays one key.
+        for (auto const& member : shakeNames) {
+            float const keyed = member == name ? value : valueAt(member);
+            properties.channels[member][tick].value = keyed;
+        }
+        staticOf(name) = value;
+    };
+    shakeField(
+        "##shake-strength",
         ICON_ACTION_BAR,
         "playback.refactorEditor.details.shakeStrength"_tr(),
         Property::ShakeStrength,
-        properties.shakeStrength,
         0.0f,
         ShakeSettings::MaxStrength,
-        "%.2f");
-    row("frequency",
+        "%.2f"
+    );
+    shakeField(
+        "##shake-frequency",
         ICON_GRAPH,
         "playback.refactorEditor.details.shakeFrequency"_tr(),
         Property::ShakeFrequency,
-        properties.shakeFrequency,
         ShakeSettings::MinFrequency,
         ShakeSettings::MaxFrequency,
-        "%.2f Hz");
-    row("position",
+        "%.2f Hz"
+    );
+    shakeField(
+        "##shake-position",
         ICON_POSITION,
         "playback.refactorEditor.details.shakePosition"_tr(),
         Property::ShakePosition,
-        properties.shake.positionAmount,
         0.0f,
         ShakeSettings::MaxPositionAmount,
-        "%.2f");
-    row("rotation",
+        "%.2f"
+    );
+    shakeField(
+        "##shake-rotation",
         ICON_ROTATE,
         "playback.refactorEditor.details.shakeRotation"_tr(),
         Property::ShakeRotation,
-        properties.shake.rotationAmount,
         0.0f,
         ShakeSettings::MaxRotationAmount,
-        "%.1f°");
-    row("roll",
+        "%.1f°"
+    );
+    shakeField(
+        "##shake-roll",
         ICON_ROTATE,
         "playback.refactorEditor.details.shakeRoll"_tr(),
         Property::ShakeRoll,
-        properties.shake.rollAmount,
         0.0f,
         ShakeSettings::MaxRotationAmount,
-        "%.1f°");
+        "%.1f°"
+    );
 
     ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeSeed"_tr().c_str());
     ImGui::SetNextItemWidth(-1.0f);

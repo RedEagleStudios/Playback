@@ -5,9 +5,12 @@
 #include "ShakeSettings.h"
 #include "PropertyChannel.h"
 
+#include <algorithm>
+#include <array>
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace playback::state::editing::model {
 
@@ -50,7 +53,15 @@ inline constexpr char const* ShakeFrequency = "shakeFrequency";
 inline constexpr char const* ShakePosition  = "shakePosition";
 inline constexpr char const* ShakeRotation  = "shakeRotation";
 inline constexpr char const* ShakeRoll      = "shakeRoll";
+// The shake keys as one: a shake key holds all five values at its tick. Not a channel itself.
+inline constexpr char const* Shake = "shake";
+// The channels a Shake key sets, in the order the inspector lists them.
+inline constexpr std::array<char const*, 5> ShakeMembers{ShakeStrength, ShakeFrequency, ShakePosition, ShakeRotation, ShakeRoll};
 } // namespace CameraProperty
+
+[[nodiscard]] inline bool isShakeProperty(std::string_view name) {
+    return std::ranges::any_of(CameraProperty::ShakeMembers, [name](char const* member) { return name == member; });
+}
 
 // A property's static value; unknown names give 0.
 [[nodiscard]] inline float cameraStaticValue(CameraEntity const& camera, std::string const& name) {

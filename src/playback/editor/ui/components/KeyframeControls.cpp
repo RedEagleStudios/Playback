@@ -158,6 +158,32 @@ bool easingPopup(char const* id, ValueChannels& channels, std::vector<std::strin
 
 } // namespace
 
+RowResult groupHeader(
+    char const*                                     id,
+    char const*                                     icon,
+    std::string const&                              label,
+    ValueChannels&                                  channels,
+    std::vector<std::string> const&                 names,
+    int                                             tick,
+    std::function<float(std::string const&)> const& valueOf
+) {
+    RowResult           result;
+    ValueChannel const* first     = channelOf(channels, names.front());
+    bool const          keyedHere = first && first->contains(tick);
+    auto const          clicks    = header(id, icon, label, first, keyedHere, tick);
+    if (clicks.toggle) {
+        for (auto const& name : names) {
+            if (keyedHere) channels[name].erase(tick);
+            else channels[name].insert_or_assign(tick, ValueKey{valueOf(name)});
+        }
+        state::editing::model::pruneChannels(channels);
+        result.changed = true;
+    }
+    result.seek = clicks.seek;
+    if (easingPopup(id, channels, names, tick, clicks.easingMenu)) result.changed = true;
+    return result;
+}
+
 std::string easingName(KeyEasing easing) {
     switch (easing) {
     case KeyEasing::Linear:
@@ -172,23 +198,6 @@ std::string easingName(KeyEasing easing) {
         return "playback.refactorEditor.keyframes.easingHold"_tr();
     }
     return {};
-}
-
-bool diamondButton(char const* id, bool keyedHere, bool keyed, char const* tooltip) {
-    float const size    = std::floor(ImGui::GetTextLineHeight() + 2.0f * metrics::scale());
-    bool const  clicked = smallButton(id, size, true);
-    ImVec2 const centre{
-        (ImGui::GetItemRectMin().x + ImGui::GetItemRectMax().x) * 0.5f,
-        (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f,
-    };
-    drawDiamond(
-        centre,
-        size * 0.32f,
-        keyedHere,
-        keyedHere ? theme::kKeyframeSelected : keyed ? theme::kKeyframe : theme::kIconInactive
-    );
-    if (tooltip) widgets::itemTooltip(tooltip);
-    return clicked;
 }
 
 RowResult propertyRow(

@@ -60,9 +60,17 @@ void TrackTreeModel::rebuild(const EditorStateExt& state, std::set<std::string> 
         parent.expanded   = parent.expandable && expanded.contains(parent.id);
         if (!parent.expanded) return;
         TrackTreeRow const copy = parent;
+        bool shakeListed = false;
         for (auto const& [name, channel] : channels) {
             if (channel.empty()) continue;
-            TrackTreeRow row{TrackRowKind::Property, copy.id + "/" + name, propertyLabel(name)};
+            // A camera's shake keys as one, so its five channels share one row.
+            std::string property = name;
+            if (owner == PropertyOwner::Camera && isShakeProperty(name)) {
+                if (shakeListed) continue;
+                shakeListed = true;
+                property    = CameraProperty::Shake;
+            }
+            TrackTreeRow row{TrackRowKind::Property, copy.id + "/" + property, propertyLabel(property)};
             row.height       = std::floor(cameraHeight * 1.25f);
             row.cameraId     = copy.cameraId;
             row.cameraIndex  = copy.cameraIndex;
@@ -71,7 +79,7 @@ void TrackTreeModel::rebuild(const EditorStateExt& state, std::set<std::string> 
             row.overlayId    = copy.overlayId;
             row.overlayIndex = copy.overlayIndex;
             row.overlayKind  = copy.overlayKind;
-            row.property     = name;
+            row.property     = property;
             row.owner        = owner;
             row.ownerId      = ownerId;
             mRows.push_back(std::move(row));

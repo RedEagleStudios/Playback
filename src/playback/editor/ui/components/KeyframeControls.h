@@ -3,11 +3,11 @@
 #include "playback/state/editing/models/PropertyChannel.h"
 #include "playback/state/editing/models/MathTypes.h"
 
-#include <algorithm>
 #include <array>
-#include <initializer_list>
+#include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 // Keyframes as in a video editor: every property keys on its own. Each row shows a diamond beside its name (hollow:
 // no key here, filled: a key at the playhead) with arrows to the property's previous and next key. Every edit keys the
@@ -48,34 +48,19 @@ RowResult colorRow(
     int                                   tick
 );
 
-// The keyframe diamond alone, for headers that key several properties at once: true when clicked.
-bool diamondButton(char const* id, bool keyedHere, bool keyed, char const* tooltip);
+// The header of properties keyed as one (a camera shake): its diamond keys every name at the playhead, each at
+// `valueOf(name)`, or removes them all, and right-click sets their easing together. Their fields carry no diamonds.
+RowResult groupHeader(
+    char const*                                     id,
+    char const*                                     icon,
+    std::string const&                              label,
+    state::editing::model::ValueChannels&           channels,
+    std::vector<std::string> const&                 names,
+    int                                             tick,
+    std::function<float(std::string const&)> const& valueOf
+);
 
 // Key easing names for menus, by KeyEasing.
 [[nodiscard]] std::string easingName(state::editing::model::KeyEasing easing);
-
-// Every property's key at `tick`, or none, toggled as one: keys them all at their current values when any is
-// missing, else removes them all. `values` gives the value to key for each name.
-template <typename ValueOf>
-bool toggleKeys(
-    state::editing::model::ValueChannels& channels,
-    std::initializer_list<char const*>    names,
-    int                                   tick,
-    ValueOf&&                             valueOf
-) {
-    bool const all = std::ranges::all_of(names, [&](char const* name) {
-        auto const channel = channels.find(name);
-        return channel != channels.end() && channel->second.contains(tick);
-    });
-    for (char const* name : names) {
-        if (all) {
-            if (auto channel = channels.find(name); channel != channels.end()) channel->second.erase(tick);
-        } else {
-            channels[name].insert_or_assign(tick, state::editing::model::ValueKey{valueOf(name)});
-        }
-    }
-    state::editing::model::pruneChannels(channels);
-    return true;
-}
 
 } // namespace playback::editor::ui::keyframes

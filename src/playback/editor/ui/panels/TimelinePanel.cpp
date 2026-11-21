@@ -109,6 +109,15 @@ struct RowChannel {
     int                                        offset{};
 };
 
+// The channels a Property row edits: the camera shake's five as one, else its own.
+std::vector<std::string> rowMembers(TrackTreeRow const& row) {
+    if (row.owner == PropertyOwner::Camera && row.property == state::editing::model::CameraProperty::Shake) {
+        auto const& members = state::editing::model::CameraProperty::ShakeMembers;
+        return {members.begin(), members.end()};
+    }
+    return {row.property};
+}
+
 RowChannel rowChannel(state::editing::model::EditorStateExt const& project, TrackTreeRow const& row) {
     state::editing::model::ValueChannels const* channels = nullptr;
     int                                         offset   = 0;
@@ -130,9 +139,12 @@ RowChannel rowChannel(state::editing::model::EditorStateExt const& project, Trac
         break;
     }
     if (!channels) return {};
-    auto const channel = channels->find(row.property);
-    if (channel == channels->end() || channel->second.empty()) return {};
-    return {&channel->second, offset};
+    // The shake row draws its strength (the first of its channels there is); its keys sit at the same ticks in all.
+    for (auto const& name : rowMembers(row)) {
+        auto const channel = channels->find(name);
+        if (channel != channels->end() && !channel->second.empty()) return {&channel->second, offset};
+    }
+    return {};
 }
 
 // Every keyed tick of a set of channels, on the timeline.
@@ -1135,11 +1147,24 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                             .c_str(),
                         !row.locked
                     )) {
-                    float const value = state::editing::model::sampleChannel(*keyed.channel, local).value_or(0.0f);
+                    // Every channel of the row keys at its value here (a camera's from the camera itself, so a
+                    // shake value without keys yet keys at its set value).
+                    auto const members = rowMembers(row);
+                    std::vector<float> values;
+                    auto const camera = std::ranges::find(project->cameras, row.ownerId, &state::editing::model::CameraEntity::id);
+                    for (auto const& name : members) {
+                        values.push_back(
+                            row.owner == PropertyOwner::Camera && camera != project->cameras.end()
+                                ? state::editing::model::cameraPropertyAt(*camera, name, local)
+                                : state::editing::model::sampleChannel(*keyed.channel, local).value_or(0.0f)
+                        );
+                    }
                     editChannels(ctx, row.owner, row.ownerId, [&](state::editing::model::ValueChannels& channels) {
-                        auto& channel = channels[row.property];
-                        if (keyedHere) channel.erase(local);
-                        else channel.insert_or_assign(local, state::editing::model::ValueKey{value});
+                        for (size_t index = 0; index < members.size(); ++index) {
+                            auto& channel = channels[members[index]];
+                            if (keyedHere) channel.erase(local);
+                            else channel.insert_or_assign(local, state::editing::model::ValueKey{values[index]});
+                        }
                     });
                 }
                 if (control(
@@ -2711,12 +2736,14 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 } else if (mChannelDragTick != mChannelDragKey) {
                     int const         from     = mChannelDragKey;
                     int const         to       = mChannelDragTick;
-                    std::string const property = row->property;
+                    auto const members = rowMembers(*row);
                     editChannels(ctx, row->owner, row->ownerId, [&](state::editing::model::ValueChannels& channels) {
-                        auto& channel = channels[property];
-                        auto  moved   = channel.extract(from);
-                        if (!moved) return;
-                        channel.insert_or_assign(to, moved.mapped());
+                        for (auto const& name : members) {
+                            auto& channel = channels[name];
+                            auto  moved   = channel.extract(from);
+                            if (!moved) continue;
+                            channel.insert_or_assign(to, moved.mapped());
+                        }
                     });
                 }
                 mChannelDragRow.clear();
@@ -3201,7 +3228,7 @@ void TimelinePanel::drawChannelKeyMenu(PanelContext const& ctx) {
     }
     int const         tick     = mChannelMenuKey;
     auto const        current  = keyed.channel->at(tick).easing;
-    std::string const property = row->property;
+    auto const        members  = rowMembers(*row);
     ImGui::TextDisabled("%s  %s", row->name.c_str(), formatTick(tick + keyed.offset).c_str());
     ImGui::Separator();
     ImGui::BeginDisabled(row->locked);
@@ -3210,7 +3237,11 @@ void TimelinePanel::drawChannelKeyMenu(PanelContext const& ctx) {
         auto const easing = static_cast<state::editing::model::KeyEasing>(index);
         if (ImGui::MenuItem(keyframes::easingName(easing).c_str(), nullptr, current == easing)) {
             editChannels(ctx, row->owner, row->ownerId, [&](state::editing::model::ValueChannels& channels) {
-                channels[property][tick].easing = easing;
+                for (auto const& name : members) {
+                    if (auto channel = channels.find(name); channel != channels.end()) {
+                        if (auto key = channel->second.find(tick); key != channel->second.end()) key->second.easing = easing;
+                    }
+                }
             });
         }
     }
@@ -3218,7 +3249,7 @@ void TimelinePanel::drawChannelKeyMenu(PanelContext const& ctx) {
     if (ImGui::MenuItem("playback.refactorEditor.keyframes.seekToKey"_tr().c_str())) submitSeek(ctx, tick + keyed.offset);
     if (ImGui::MenuItem("playback.refactorEditor.keyframes.deleteKey"_tr().c_str(), "Del")) {
         editChannels(ctx, row->owner, row->ownerId, [&](state::editing::model::ValueChannels& channels) {
-            channels[property].erase(tick);
+            for (auto const& name : members) channels[name].erase(tick);
         });
         mChannelMenuRow.clear();
     }
