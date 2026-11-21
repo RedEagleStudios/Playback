@@ -8,8 +8,8 @@
 
 namespace playback::editor::graphics {
 
-// Blurs a finished frame in place on the GPU, one BlurPass after another. Each pass copies the frame to a scratch
-// texture and writes the blurred picture back through a UAV, so the frame must allow unordered access. Scratches are
+// Blurs or lights a finished frame in place on the GPU, one BlurPass after another. Each pass copies the frame to a
+// scratch texture and writes the result back through a UAV, so the frame must allow unordered access. Scratches are
 // reused from frame to frame: work on one queue runs in order. Each dispatch uses the next of a ring of descriptor
 // sets, so a handful of frames can be in flight at once.
 class D3D12BlurPass {

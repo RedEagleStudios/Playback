@@ -4,6 +4,7 @@
 #include "playback/editor/ui/components/Animator.h"
 #include "playback/editor/ui/components/TimelineScale.h"
 #include "playback/editor/ui/components/TrackTreeModel.h"
+#include "playback/editor/ui/components/VanillaPicker.h"
 #include "playback/state/EditorAction.h"
 
 #include "imgui.h"
@@ -96,12 +97,15 @@ private:
     void queuePoseKeySelection(std::string poseKeyId);
     void queueOverlaySelection(std::string overlayId);
     // A title, shape or model layer from the playhead, selected once it exists. A model asks for its file first.
+    // A model layer with `asset` set is that Minecraft block or item; without it, it asks for a .mimodel file.
     void addLayer(
         PanelContext const&                ctx,
         state::editing::model::OverlayKind kind,
         state::editing::model::ShapeKind   shape  = state::editing::model::ShapeKind::Rectangle,
         int                                points = 3,
-        state::editing::model::BlurStyle   blur   = state::editing::model::BlurStyle::Gaussian
+        state::editing::model::BlurStyle   blur   = state::editing::model::BlurStyle::Gaussian,
+        state::editing::model::LightStyle  light  = state::editing::model::LightStyle::Point,
+        std::string const&                 asset  = {}
     );
     void applyPendingSelection(PanelContext const& ctx);
     [[nodiscard]] std::string markerAt(
@@ -152,6 +156,7 @@ private:
     void drawTransportGroup(PanelContext const& ctx, int displayTick, float width);
 
     TrackTreeModel mTrackTree;
+    VanillaPicker  mVanillaPicker;
     Animator       mAnimator;
     float          mZoomScale{1.0f};
     float          mScrollX{};

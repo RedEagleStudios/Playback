@@ -2,6 +2,7 @@
 
 #include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/editor/ui/iconfont.h"
+#include "playback/overlay/VanillaAssets.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -24,7 +25,7 @@ namespace {
 
 constexpr int kDefaultLayerTicks = 100;
 
-std::string defaultName(OverlayKind kind, ShapeKind shape, int points, BlurStyle blur, int number) {
+std::string defaultName(OverlayKind kind, ShapeKind shape, int points, BlurStyle blur, LightStyle light, int number) {
     switch (kind) {
     case OverlayKind::Title:
         return "playback.refactorEditor.layers.defaultTitle"_tr(number);
@@ -32,6 +33,8 @@ std::string defaultName(OverlayKind kind, ShapeKind shape, int points, BlurStyle
         return "playback.refactorEditor.layers.defaultModel"_tr(number);
     case OverlayKind::Blur:
         return "playback.refactorEditor.layers.defaultBlur"_tr(blurStyleName(blur), number);
+    case OverlayKind::Light:
+        return "playback.refactorEditor.layers.defaultBlur"_tr(lightStyleName(light), number);
     case OverlayKind::Shape:
         break;
     }
@@ -83,8 +86,15 @@ std::vector<OverlayItem> withItem(EditorStateExt const& project, OverlayItem con
 
 } // namespace
 
-OverlayItem
-makeLayer(EditorStateExt const& project, OverlayKind kind, int tick, ShapeKind shape, int points, BlurStyle blur) {
+OverlayItem makeLayer(
+    EditorStateExt const& project,
+    OverlayKind           kind,
+    int                   tick,
+    ShapeKind             shape,
+    int                   points,
+    BlurStyle             blur,
+    LightStyle            light
+) {
     OverlayItem item;
     item.id          = nextId(project);
     item.kind        = kind;
@@ -110,12 +120,24 @@ makeLayer(EditorStateExt const& project, OverlayKind kind, int tick, ShapeKind s
         item.transform.width  = 0.4f;
         item.transform.height = 0.3f;
     }
+    if (kind == OverlayKind::Light) {
+        // A warm key light from the upper left that reads at once; a spot points down and right into the frame.
+        item.light.style      = light;
+        item.light.kelvin     = 4500.0f;
+        item.transform.x      = light == LightStyle::Spot ? 0.2f : 0.35f;
+        item.transform.y      = light == LightStyle::Spot ? 0.1f : 0.35f;
+        item.transform.width  = light == LightStyle::Spot ? 0.05f : 0.6f;
+        item.transform.height = light == LightStyle::Spot ? 0.9f : 0.6f;
+        item.transform.rotation = light == LightStyle::Spot ? 60.0f : light == LightStyle::Strip ? 45.0f : 0.0f;
+        if (light == LightStyle::Strip) item.transform.height = 0.25f;
+        if (light == LightStyle::Ambient) item.light.level = 0.3f;
+    }
 
     int const sameKind = static_cast<int>(std::ranges::count_if(project.overlays, [&](OverlayItem const& other) {
         return other.kind == kind;
     }));
     for (int number = sameKind + 1;; ++number) {
-        item.name = defaultName(kind, shape, item.shape.points, blur, number);
+        item.name = defaultName(kind, shape, item.shape.points, blur, light, number);
         if (std::ranges::none_of(project.overlays, [&](OverlayItem const& other) { return other.name == item.name; }))
             break;
     }
@@ -175,14 +197,44 @@ char const* blurStyleIcon(BlurStyle style) {
     return ICON_BLUR;
 }
 
+std::string lightStyleName(LightStyle style) {
+    switch (style) {
+    case LightStyle::Point:
+        return "playback.refactorEditor.layers.lightPoint"_tr();
+    case LightStyle::Spot:
+        return "playback.refactorEditor.layers.lightSpot"_tr();
+    case LightStyle::Strip:
+        return "playback.refactorEditor.layers.lightStrip"_tr();
+    case LightStyle::Ambient:
+        return "playback.refactorEditor.layers.lightAmbient"_tr();
+    }
+    return {};
+}
+
+char const* lightStyleIcon(LightStyle style) {
+    switch (style) {
+    case LightStyle::Point:
+        return ICON_LIGHT_POINT;
+    case LightStyle::Spot:
+        return ICON_LIGHT_SPOT;
+    case LightStyle::Strip:
+        return ICON_LIGHT_STRIP;
+    case LightStyle::Ambient:
+        return ICON_LIGHT_AMBIENT;
+    }
+    return ICON_LIGHT_POINT;
+}
+
 char const* icon(OverlayItem const& item) {
     switch (item.kind) {
     case OverlayKind::Title:
         return ICON_TITLE;
     case OverlayKind::Model:
-        return ICON_MODEL;
+        return overlay::vanilla::isAsset(item.model.file) ? ICON_VANILLA : ICON_MODEL;
     case OverlayKind::Blur:
         return blurStyleIcon(item.blur.style);
+    case OverlayKind::Light:
+        return lightStyleIcon(item.light.style);
     case OverlayKind::Shape:
         break;
     }

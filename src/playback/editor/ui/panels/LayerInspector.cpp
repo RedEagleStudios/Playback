@@ -8,6 +8,7 @@
 #include "playback/overlay/MimodelRenderer.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/overlay/OverlayRenderer.h"
+#include "playback/overlay/VanillaAssets.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -130,6 +131,9 @@ bool LayerInspector::draw(PanelContext const& ctx) {
         break;
     case OverlayKind::Blur:
         drawBlurSection(item);
+        break;
+    case OverlayKind::Light:
+        drawLightSection(item);
         break;
     }
     ImGui::EndDisabled();
@@ -318,11 +322,20 @@ void LayerInspector::drawTransformSection(OverlayItem& item) {
 
 void LayerInspector::drawModelSection(OverlayItem& item) {
     auto& model = item.model;
-    if (!property::beginSection((ICON_MODEL "  " + "playback.refactorEditor.layers.model"_tr()).c_str())) return;
-    label("playback.refactorEditor.layers.modelFile"_tr());
+    bool const vanilla = overlay::vanilla::isAsset(model.file);
+    if (!property::beginSection(((vanilla ? ICON_VANILLA "  " : ICON_MODEL "  ") + "playback.refactorEditor.layers.model"_tr()).c_str()))
+        return;
+    label(vanilla ? "playback.refactorEditor.layers.vanillaAsset"_tr() : "playback.refactorEditor.layers.modelFile"_tr());
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(model.file.empty() ? "-" : model.file.c_str());
+    ImGui::TextUnformatted(
+        model.file.empty() ? "-" : vanilla ? overlay::vanilla::displayName(model.file).c_str() : model.file.c_str()
+    );
     ImGui::PopTextWrapPos();
+    // A layer can show a Mine-imator file or one of Minecraft's own blocks and items; either can replace the other.
+    if (property::actionButton((ICON_VANILLA "  " + "playback.refactorEditor.layers.chooseVanilla"_tr()).c_str())) {
+        widgets::openAnchoredPopup("##layer-vanilla-picker");
+    }
+    if (std::string asset; mVanillaPicker.draw("##layer-vanilla-picker", asset)) model.file = asset;
     if (property::actionButton("playback.refactorEditor.layers.browse"_tr().c_str())) {
         if (auto const file = overlays::pickModelFile()) model.file = *file;
     }
@@ -355,6 +368,62 @@ void LayerInspector::drawModelSection(OverlayItem& item) {
     keyRow(item, "scale", ICON_SCALE, "playback.refactorEditor.layers.scale"_tr(), "scale", 0.01f, 16.0f, "%.2fx");
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", "playback.refactorEditor.layers.modelHint"_tr().c_str());
+    ImGui::PopTextWrapPos();
+    property::endSection();
+}
+
+void LayerInspector::drawLightSection(OverlayItem& item) {
+    using state::editing::model::LightStyle;
+    auto& light = item.light;
+    if (!property::beginSection((ICON_LIGHT_POINT "  " + "playback.refactorEditor.layers.light"_tr()).c_str())) return;
+
+    label("playback.refactorEditor.layers.lightStyle"_tr());
+    std::string const current = std::string(overlays::lightStyleIcon(light.style)) + "  " + overlays::lightStyleName(light.style);
+    if (widgets::beginCombo("##light-style", current.c_str())) {
+        for (auto const style : {LightStyle::Point, LightStyle::Spot, LightStyle::Strip, LightStyle::Ambient}) {
+            std::string const name = std::string(overlays::lightStyleIcon(style)) + "  " + overlays::lightStyleName(style);
+            if (ImGui::Selectable(name.c_str(), style == light.style)) light.style = style;
+        }
+        widgets::endCombo();
+    }
+    // Level in percent of the picture's own brightness: 100% doubles it, negative darkens.
+    keyRow(item, "light-level", ICON_EXPOSURE, "playback.refactorEditor.layers.lightLevel"_tr(), "lightLevel", -100.0f, 2000.0f, "%+.0f%%", 100.0f);
+    keyRow(item, "light-hardness", nullptr, "playback.refactorEditor.layers.lightHardness"_tr(), "lightHardness", 0.0f, 100.0f, "%.0f%%", 100.0f);
+    keyRow(item, "light-kelvin", ICON_TEMPERATURE, "playback.refactorEditor.layers.lightKelvin"_tr(), "lightKelvin", 1000.0f, 12000.0f, "%.0f K");
+    auto const filter = keyframes::colorRow(
+        "light-filter",
+        ICON_PALETTE,
+        "playback.refactorEditor.layers.lightFilter"_tr(),
+        item.channels,
+        "lightFilter",
+        light.filter,
+        mLocalTick
+    );
+    if (filter.seek) mSeek = filter.seek;
+
+    if (light.style != LightStyle::Ambient) {
+        keyRow(item, "x", ICON_POSITION, "playback.refactorEditor.layers.positionX"_tr(), "x", -50.0f, 150.0f, "%.1f%%", 100.0f);
+        keyRow(item, "y", ICON_POSITION, "playback.refactorEditor.layers.positionY"_tr(), "y", -50.0f, 150.0f, "%.1f%%", 100.0f);
+        keyRow(item, "rotation", ICON_ROTATE, "playback.refactorEditor.layers.rotation"_tr(), "rotation", -180.0f, 180.0f, "%.1f°");
+    }
+    switch (light.style) {
+    case LightStyle::Point:
+        keyRow(item, "width", ICON_SCALE, "playback.refactorEditor.layers.width"_tr(), "width", 0.5f, 400.0f, "%.1f%%", 100.0f);
+        keyRow(item, "height", ICON_SCALE, "playback.refactorEditor.layers.height"_tr(), "height", 0.5f, 400.0f, "%.1f%%", 100.0f);
+        break;
+    case LightStyle::Spot:
+        keyRow(item, "light-spread", nullptr, "playback.refactorEditor.layers.lightSpread"_tr(), "lightSpread", 1.0f, 89.0f, "%.1f°");
+        keyRow(item, "height", ICON_SCALE, "playback.refactorEditor.layers.lightReach"_tr(), "height", 0.5f, 400.0f, "%.1f%%", 100.0f);
+        keyRow(item, "width", ICON_SCALE, "playback.refactorEditor.layers.lightSource"_tr(), "width", 0.0f, 100.0f, "%.1f%%", 100.0f);
+        break;
+    case LightStyle::Strip:
+        keyRow(item, "height", ICON_SCALE, "playback.refactorEditor.layers.lightThickness"_tr(), "height", 0.5f, 400.0f, "%.1f%%", 100.0f);
+        break;
+    case LightStyle::Ambient:
+        break;
+    }
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", "playback.refactorEditor.layers.lightHint"_tr().c_str());
     ImGui::PopTextWrapPos();
     property::endSection();
 }

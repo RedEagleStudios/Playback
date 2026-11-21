@@ -4,16 +4,18 @@
 #include "PropertyChannel.h"
 
 #include <algorithm>
+#include <array>
 #include <string_view>
 #include <string>
 #include <vector>
 
 namespace playback::state::editing::model {
 
-// A layer over the replay picture, in the preview and in every export: a title, a shape, a Mine-imator model placed in
-// the world, or a blur of the picture itself. Items later in EditorStateExt::overlays draw on top of earlier ones;
-// blurs act on the replay picture, under every title, shape and model.
-enum class OverlayKind : uint8_t { Title, Shape, Model, Blur };
+// A layer over the replay picture, in the preview and in every export: a title, a shape, a model placed in the world
+// (a Mine-imator file, or a Minecraft block or item), a blur of the picture, or a light on it. Items later in
+// EditorStateExt::overlays draw on top of earlier ones; blurs and lights act on the replay picture, in layer order, under
+// every title, shape and model.
+enum class OverlayKind : uint8_t { Title, Shape, Model, Blur, Light };
 
 // Polygon: a regular polygon of `points` corners (3 is a triangle; many approach a circle).
 enum class ShapeKind : uint8_t { Rectangle, Ellipse, Polygon };
@@ -111,6 +113,28 @@ struct BlurSettings {
     bool operator==(BlurSettings const&) const = default;
 };
 
+// Point: a glow around the position, the size of the layer's width x height, turned by its rotation. Spot: a cone from
+// the position towards the rotation (0 points right, clockwise), reaching the layer's height, `spread` degrees either
+// side. Strip: a band through the position along the rotation, the layer's height thick, as light through a window.
+// Ambient: the whole frame alike.
+enum class LightStyle : uint8_t { Point, Spot, Strip, Ambient };
+
+struct LightSettings {
+    LightStyle style{LightStyle::Point};
+    // How much brighter the lit picture gets at full strength: 1 doubles it; negative darkens.
+    float level{1.0f};
+    // 0 fades over the whole reach, 1 a hard edge.
+    float hardness{0.2f};
+    // Colour temperature: 1000 K candle orange to 12000 K blue sky; 6500 K is white.
+    float kelvin{6500.0f};
+    // A gel over the light, multiplied with the temperature's colour.
+    std::array<float, 3> filter{1.0f, 1.0f, 1.0f};
+    // Spot: half the cone's angle, in degrees.
+    float spread{25.0f};
+
+    bool operator==(LightSettings const&) const = default;
+};
+
 struct OverlayItem {
     std::string id;
     std::string name;
@@ -128,6 +152,7 @@ struct OverlayItem {
     ShapeStyle       shape;
     ModelPlacement   model;
     BlurSettings     blur;
+    LightSettings    light;
     // Keyed numeric properties (overlayProperty names), each on its own. Key ticks count from startTick, so moving
     // the layer moves its keys with it.
     ValueChannels channels;
@@ -175,6 +200,13 @@ struct OverlayItem {
     if (name == "blurAmount") return &item.blur.amount;
     if (name == "blurAngle") return &item.blur.angle;
     if (name == "blurFeather") return &item.blur.feather;
+    if (name == "lightLevel") return &item.light.level;
+    if (name == "lightHardness") return &item.light.hardness;
+    if (name == "lightKelvin") return &item.light.kelvin;
+    if (name == "lightFilterR") return &item.light.filter[0];
+    if (name == "lightFilterG") return &item.light.filter[1];
+    if (name == "lightFilterB") return &item.light.filter[2];
+    if (name == "lightSpread") return &item.light.spread;
     return nullptr;
 }
 

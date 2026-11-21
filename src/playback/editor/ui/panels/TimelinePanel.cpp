@@ -8,6 +8,7 @@
 #include "playback/editor/ui/components/TimelineScale.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
+#include "playback/overlay/VanillaAssets.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
 
@@ -101,6 +102,8 @@ ImU32 layerColor(state::editing::model::OverlayKind kind) {
         return theme::kLayerModel;
     case state::editing::model::OverlayKind::Blur:
         return theme::kLayerBlur;
+    case state::editing::model::OverlayKind::Light:
+        return theme::kLayerLight;
     }
     return theme::kLayerTitle;
 }
@@ -804,13 +807,19 @@ void TimelinePanel::addLayer(
     state::editing::model::OverlayKind kind,
     state::editing::model::ShapeKind   shape,
     int                                points,
-    state::editing::model::BlurStyle   blur
+    state::editing::model::BlurStyle   blur,
+    state::editing::model::LightStyle  light,
+    std::string const&                 asset
 ) {
     auto const* project = ctx.project();
     if (!project) return;
     int const tick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
-    auto      item = overlays::makeLayer(*project, kind, tick, shape, points, blur);
-    if (kind == state::editing::model::OverlayKind::Model) {
+    auto      item = overlays::makeLayer(*project, kind, tick, shape, points, blur, light);
+    if (kind == state::editing::model::OverlayKind::Model && !asset.empty()) {
+        // A Minecraft block or item, named after it.
+        item.model.file = asset;
+        item.name       = overlay::vanilla::displayName(asset);
+    } else if (kind == state::editing::model::OverlayKind::Model) {
         auto const file = overlays::pickModelFile();
         if (!file) return;
         item.model.file = *file;
@@ -856,6 +865,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         )) {
         widgets::openAnchoredPopup("##timeline-add-menu");
     }
+    ImVec2 const addMin = ImGui::GetItemRectMin();
+    ImVec2 const addMax = ImGui::GetItemRectMax();
+    bool         pickVanilla = false;
     if (widgets::beginAnchoredPopup("##timeline-add-menu")) {
         // An empty name lets the ops layer pick the next free localized default.
         // The action kind picks the track kind: keyframe, first person or third person.
@@ -912,6 +924,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         if (ImGui::MenuItem((ICON_MODEL "  " + "playback.refactorEditor.layers.addModel"_tr()).c_str())) {
             addLayer(ctx, OverlayKind::Model);
         }
+        // Minecraft's own blocks and items, placed in the world like a model.
+        if (ImGui::MenuItem((ICON_VANILLA "  " + "playback.refactorEditor.layers.addVanilla"_tr()).c_str())) {
+            pickVanilla = true;
+        }
         // Blurs act on the replay picture over their stretch of the timeline, the whole frame or an area of it.
         if (ImGui::BeginMenu((ICON_BLUR "  " + "playback.refactorEditor.layers.addBlur"_tr()).c_str())) {
             using state::editing::model::BlurStyle;
@@ -923,7 +939,33 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             }
             ImGui::EndMenu();
         }
+        // Lights brighten the replay picture: a glow, a spot cone, a band of light or the whole frame.
+        if (ImGui::BeginMenu((ICON_LIGHT_POINT "  " + "playback.refactorEditor.layers.addLight"_tr()).c_str())) {
+            using state::editing::model::BlurStyle;
+            using state::editing::model::LightStyle;
+            for (auto const style : {LightStyle::Point, LightStyle::Spot, LightStyle::Strip, LightStyle::Ambient}) {
+                std::string const label =
+                    std::string(overlays::lightStyleIcon(style)) + "  " + overlays::lightStyleName(style);
+                if (ImGui::MenuItem(label.c_str())) {
+                    addLayer(ctx, OverlayKind::Light, ShapeKind::Rectangle, 3, BlurStyle::Gaussian, style);
+                }
+            }
+            ImGui::EndMenu();
+        }
         widgets::endAnchoredPopup();
+    }
+    // The picker is its own popup, opened once the menu has closed.
+    if (pickVanilla) widgets::openAnchoredPopup("##timeline-vanilla-picker", addMin, addMax);
+    if (std::string asset; mVanillaPicker.draw("##timeline-vanilla-picker", asset)) {
+        addLayer(
+            ctx,
+            OverlayKind::Model,
+            ShapeKind::Rectangle,
+            3,
+            state::editing::model::BlurStyle::Gaussian,
+            state::editing::model::LightStyle::Point,
+            asset
+        );
     }
     ImGui::SameLine(0.0f, gap);
     ImGui::SetCursorPosY(controlY);

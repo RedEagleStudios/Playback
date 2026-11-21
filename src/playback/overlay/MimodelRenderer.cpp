@@ -1,6 +1,7 @@
 #include "MimodelRenderer.h"
 
 #include "MimodelMesh.h"
+#include "VanillaAssets.h"
 
 #include <glm/geometric.hpp>
 #include <glm/mat3x3.hpp>
@@ -85,7 +86,8 @@ struct ModelCache {
         if (auto const it = cache.entries.find(file); it != cache.entries.end()) {
             auto& entry   = it->second;
             entry.lastUse = ++cache.useCounter;
-            if (now - entry.checkedAt < RecheckInterval) {
+            // Minecraft's own blocks and items come from the installed game, which does not change while it runs.
+            if (now - entry.checkedAt < RecheckInterval || vanilla::isAsset(file)) {
                 error = entry.error;
                 return entry.model;
             }
@@ -103,9 +105,9 @@ struct ModelCache {
 
     CacheEntry fresh;
     auto const path = mimodel::pathFromUtf8(file);
-    fresh.model     = mimodel::loadModel(path, fresh.error);
+    fresh.model     = vanilla::isAsset(file) ? vanilla::loadModel(file, fresh.error) : mimodel::loadModel(path, fresh.error);
     if (fresh.model) fresh.sources = fresh.model->sources;
-    else fresh.sources = {{path, stampOf(path)}};
+    else if (!vanilla::isAsset(file)) fresh.sources = {{path, stampOf(path)}};
     fresh.checkedAt = now;
 
     std::lock_guard lock(cache.mutex);

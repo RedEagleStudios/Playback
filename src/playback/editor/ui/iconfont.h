@@ -84,6 +84,12 @@ namespace Playback::ReplayEditor::Icons {
 #define ICON_MOSAIC     "\ue0ff" // layout-grid
 #define ICON_MOTION     "\ue1b0" // wind
 #define ICON_RADIAL     "\ue29e" // focus
+#define ICON_LIGHT_POINT "\ue1c2" // lightbulb
+#define ICON_LIGHT_SPOT  "\ue682" // spotlight
+#define ICON_LIGHT_STRIP "\ue27a" // align-vertical-space-around
+#define ICON_LIGHT_AMBIENT "\ue299" // sun-dim
+#define ICON_VANILLA     "\ue4fa" // blocks
+#define ICON_VANILLA_ITEM "\ue5c6" // pickaxe
 #define ICON_MODEL      "\ue524" // cuboid
 #define ICON_FILM       "\ue0d0" // film
 #define ICON_THIRDS     "\ue0ef" // hash

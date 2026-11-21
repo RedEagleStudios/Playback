@@ -32,10 +32,11 @@ constexpr uint32_t DescriptorsPerSet = 3;
 // The separable Gaussian's intermediate keeps linear light without banding.
 constexpr DXGI_FORMAT IntermediateFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-// Frames are sRGB-encoded, so every style averages in linear light. The frame is the largest centred rectangle of the
-// project's aspect inside the texture; lengths arrive in pixels already scaled to its height. The Gaussian runs
-// across into the intermediate (all of it: the pass down reads above and below each pixel), then down into the frame.
-// Long blurs stride their taps and let the bilinear sampler fill in between, so the cost stays bounded.
+// Frames are sRGB-encoded, so every style averages (and every light scales) in linear light. The frame is the largest
+// centred rectangle of the project's aspect inside the texture; lengths arrive in pixels already scaled to its height.
+// The Gaussian runs across into the intermediate (all of it: the pass down reads above and below each pixel), then
+// down into the frame. Long blurs stride their taps and let the bilinear sampler fill in between, so the cost stays
+// bounded. A light multiplies the picture by 1 + Tint * falloff, Tint already holding colour, level and mix.
 constexpr char const* BlurSource = R"(
 Texture2D<float4> Original : register(t0);
 Texture2D<float4> Source : register(t1);
@@ -56,6 +57,12 @@ cbuffer Params : register(b0) {
     float2 Direction;
     float Amount;
     uint Invert;
+    float3 Tint;
+    float Hardness;
+    uint LightShape;
+    float Spread;
+    float Reach;
+    float Padding;
 };
 
 static const uint GaussianAcross = 0;
@@ -63,6 +70,10 @@ static const uint GaussianDown = 1;
 static const uint Mosaic = 2;
 static const uint Motion = 3;
 static const uint Radial = 4;
+static const uint Light = 5;
+static const uint PointLight = 0;
+static const uint SpotLight = 1;
+static const uint StripLight = 2;
 static const uint MaxTapsPerSide = 32;
 static const uint StreakSamples = 32;
 
@@ -71,6 +82,34 @@ float3 toEncoded(float3 colour) { return pow(saturate(colour), 1.0f / 2.2f); }
 
 float3 sampleOriginal(float2 position) {
     return toLinear(Original.SampleLevel(Clamp, position / float2(Size), 0).rgb);
+}
+
+// How much of the light reaches a pixel `offset` from its centre, 0 to 1. Rotation is the light's direction.
+float lightFalloff(float2 offset) {
+    if (LightShape == PointLight) {
+        float2 local = float2(
+            offset.x * Rotation.x + offset.y * Rotation.y,
+            -offset.x * Rotation.y + offset.y * Rotation.x
+        );
+        return 1.0f - smoothstep(Hardness, 1.0f, length(local / HalfExtent));
+    }
+    if (LightShape == SpotLight) {
+        // The source glows as a disc of the light's width, so the cone has a visible origin.
+        float source = 1.0f - smoothstep(Hardness, 1.0f, length(offset) / HalfExtent.x);
+        float forward = dot(offset, Rotation);
+        // Behind the source the cone is dark; skipping it also keeps atan2 away from the origin.
+        if (forward <= 0.0f) return source;
+        float side = abs(Rotation.x * offset.y - Rotation.y * offset.x);
+        float angle = degrees(atan2(side, forward));
+        float cone = 1.0f - smoothstep(Spread * Hardness, Spread, angle);
+        float reach = 1.0f - smoothstep(Hardness, 1.0f, forward / Reach);
+        return max(cone * reach, source);
+    }
+    if (LightShape == StripLight) {
+        float across = abs(dot(offset, float2(-Rotation.y, Rotation.x))) / HalfExtent.y;
+        return 1.0f - smoothstep(Hardness, 1.0f, across);
+    }
+    return 1.0f;
 }
 
 // How much of the blur shows at a pixel: the area's shape, its feathered edge, inverted if asked, times the mix.
@@ -121,6 +160,17 @@ void main(uint3 id : SV_DispatchThreadID) {
     }
 
     float4 original = Original.Load(int3(id.xy, 0));
+    if (Mode == Light) {
+        float falloff = lightFalloff(position - Centre);
+        if (falloff <= 0.0f) {
+            Destination[id.xy] = float4(original.rgb, 1.0f);
+            return;
+        }
+        float3 lit = max(toLinear(original.rgb) * (1.0f + Tint * falloff), 0.0f);
+        Destination[id.xy] = float4(toEncoded(lit), 1.0f);
+        return;
+    }
+
     float weight = areaWeight(position);
     if (weight <= 0.0f) {
         Destination[id.xy] = float4(original.rgb, 1.0f);
@@ -156,7 +206,7 @@ void main(uint3 id : SV_DispatchThreadID) {
 }
 )";
 
-enum class Mode : uint32_t { GaussianAcross, GaussianDown, Mosaic, Motion, Radial };
+enum class Mode : uint32_t { GaussianAcross, GaussianDown, Mosaic, Motion, Radial, Light };
 
 struct Params {
     uint32_t width{};
@@ -173,8 +223,14 @@ struct Params {
     float    direction[2]{1.0f, 0.0f};
     float    amount{};
     uint32_t invert{};
+    float    tint[3]{};
+    float    hardness{};
+    uint32_t lightShape{};
+    float    spread{};
+    float    reach{};
+    float    padding{};
 };
-static_assert(sizeof(Params) == 20 * sizeof(uint32_t));
+static_assert(sizeof(Params) == 28 * sizeof(uint32_t));
 
 // The pass's parameters in the texture's pixels, or nullopt when it would not change the picture.
 std::optional<Params> paramsFor(BlurPass const& pass, uint32_t width, uint32_t height, float frameAspect) {
@@ -207,6 +263,19 @@ std::optional<Params> paramsFor(BlurPass const& pass, uint32_t width, uint32_t h
     params.feather        = std::max(pass.feather, 0.0f) * frameHeight;
     params.mix            = std::min(pass.mix, 1.0f);
     params.invert         = pass.invert ? 1u : 0u;
+
+    if (pass.light) {
+        if (pass.level == 0.0f) return std::nullopt;
+        params.mode       = static_cast<uint32_t>(Mode::Light);
+        params.lightShape = static_cast<uint32_t>(pass.lightStyle);
+        for (size_t channel = 0; channel < 3; ++channel)
+            params.tint[channel] = pass.colour[channel] * pass.level * params.mix;
+        // Below 1, so smoothstep(hardness, 1, x) always has an edge to ramp over.
+        params.hardness = std::clamp(pass.hardness, 0.0f, 0.98f);
+        params.spread   = std::max(pass.spread, 0.5f);
+        params.reach    = std::max(pass.height * frameHeight, 1.0f);
+        return params;
+    }
 
     switch (pass.style) {
     case BlurStyle::Gaussian:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "playback/editor/ui/PanelContext.h"
+#include "playback/editor/ui/components/VanillaPicker.h"
 #include "playback/state/editing/models/OverlayItem.h"
 
 #include <array>
@@ -9,7 +10,7 @@
 
 namespace playback::editor::ui {
 
-// The inspector for a selected title, shape or model layer: its timing, look and placement.
+// The inspector for a selected layer (title, shape, model, blur or light): its timing, look and placement.
 class LayerInspector {
 public:
     // The selected layer's name for the inspector header; empty when no layer is selected.
@@ -24,6 +25,7 @@ private:
     void drawTransformSection(state::editing::model::OverlayItem& item);
     void drawModelSection(state::editing::model::OverlayItem& item);
     void drawBlurSection(state::editing::model::OverlayItem& item);
+    void drawLightSection(state::editing::model::OverlayItem& item);
 
     // A keyable number of the layer: its diamond keys it at the playhead, which is mLocalTick into the layer.
     void keyRow(
@@ -51,6 +53,7 @@ private:
     std::array<char, 64>   mFontFilter{};
     std::string            mModelError;
     std::string            mModelErrorFile;
+    VanillaPicker          mVanillaPicker;
 };
 
 } // namespace playback::editor::ui

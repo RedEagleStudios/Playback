@@ -30,8 +30,22 @@ struct BlurPass {
     state::editing::model::BlurArea area{state::editing::model::BlurArea::Frame};
     // Blurs outside the area instead of inside it.
     bool invert{};
-    // How much of the blurred picture replaces the original, 0 to 1 (opacity and fades).
+    // How much of the blurred picture replaces the original, 0 to 1 (opacity and fades). For a light, how much of it
+    // shines.
     float mix{1.0f};
+
+    // A light instead of a blur (style, amount, angle, feather, area and invert are then unused): the picture is lit
+    // in linear light, out = in * (1 + colour * level * falloff * mix), so it brightens what is there (a negative level
+    // darkens). Geometry uses centreX/Y, width, height and rotation as described for each LightStyle.
+    bool                              light{};
+    state::editing::model::LightStyle lightStyle{state::editing::model::LightStyle::Point};
+    // Linear RGB: the Kelvin colour times the filter.
+    float colour[3]{1.0f, 1.0f, 1.0f};
+    float level{1.0f};
+    // 0 a soft falloff over the whole reach, 1 a hard edge.
+    float hardness{};
+    // Spot: the cone's half angle in degrees.
+    float spread{30.0f};
 };
 
 // The project's blur layers; any thread. The controller sets them whenever the project changes.

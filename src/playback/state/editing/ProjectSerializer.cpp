@@ -523,6 +523,15 @@ json toJson(OverlayItem const& item) {
              {"feather", item.blur.feather},
              {"invert", item.blur.invert},
          }                                             },
+        {"light",
+         json{
+             {"style", static_cast<int>(item.light.style)},
+             {"level", item.light.level},
+             {"hardness", item.light.hardness},
+             {"kelvin", item.light.kelvin},
+             {"filter", json::array({item.light.filter[0], item.light.filter[1], item.light.filter[2]})},
+             {"spread", item.light.spread},
+         }                                             },
         {"channels",     toJson(item.channels)         },
     };
 }
@@ -531,7 +540,7 @@ OverlayItem overlayFrom(json const& node) {
     OverlayItem item;
     item.id           = stringOr(node, "id");
     item.name         = stringOr(node, "name");
-    item.kind         = enumOr(node, "kind", item.kind, static_cast<int>(OverlayKind::Blur));
+    item.kind         = enumOr(node, "kind", item.kind, static_cast<int>(OverlayKind::Light));
     item.startTick    = std::max(0, intOr(node, "startTick", item.startTick));
     item.endTick      = std::max(item.startTick + 1, intOr(node, "endTick", item.endTick));
     item.fadeInTicks  = std::max(0, intOr(node, "fadeInTicks", 0));
@@ -596,6 +605,21 @@ OverlayItem overlayFrom(json const& node) {
         out.area    = enumOr(*blur, "area", out.area, static_cast<int>(BlurArea::Ellipse));
         out.feather = std::max(0.0f, finiteOr(*blur, "feather", out.feather));
         out.invert  = boolOr(*blur, "invert", out.invert);
+    }
+    if (auto const* light = objectAt(node, "light")) {
+        auto& out    = item.light;
+        out.style    = enumOr(*light, "style", out.style, static_cast<int>(LightStyle::Ambient));
+        out.level    = std::clamp(finiteOr(*light, "level", out.level), -1.0f, 20.0f);
+        out.hardness = std::clamp(finiteOr(*light, "hardness", out.hardness), 0.0f, 1.0f);
+        out.kelvin   = std::clamp(finiteOr(*light, "kelvin", out.kelvin), 1000.0f, 40000.0f);
+        out.spread   = std::clamp(finiteOr(*light, "spread", out.spread), 0.5f, 89.0f);
+        if (auto const filter = light->find("filter"); filter != light->end() && filter->is_array() && filter->size() == 3) {
+            for (size_t channel = 0; channel < 3; ++channel) {
+                if ((*filter)[channel].is_number()) {
+                    out.filter[channel] = std::clamp((*filter)[channel].get<float>(), 0.0f, 1.0f);
+                }
+            }
+        }
     }
     item.channels = channelsFrom(node, "channels");
     return item;
