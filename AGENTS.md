@@ -70,6 +70,14 @@ What the headers tell you:
   Create one with `MinecraftPackets::createPacket(MinecraftPacketIds::Foo)` and cast it.
 - Existing Playback code is the best example of a working call: `grep -rn "<member>" src` before writing a new one.
 
+## Unit tests
+
+`xmake test` builds and runs `playback_tests` (doctest, `tests/*.cpp`), which links no game code: only headers and
+sources that do not include LeviLamina. CI runs it on every pull request. To test a fix, move the logic into a function
+that takes plain types (see `src/playback/record/ControllerTransitions.h` or `src/playback/state/editing/CameraKeys.h`),
+call it from the game code, and add a test for the case that was broken. If the function lives in a `.cpp`, add that file
+to `playback_tests` in `xmake.lua`. On Linux the test binary runs through Wine.
+
 ## Runtime checks
 
 A build proves the code compiles, not that the mod works. Behaviour changes need a check in the game (see
