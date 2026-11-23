@@ -6868,6 +6868,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     case MinecraftPacketIds::RemoveActor: {
         auto const id = *static_cast<RemoveActorPacket const&>(*packet).mEntityId;
         mRecordedEntityIds.erase(id);
+        mAnimationSetupTicks.erase(id);
         std::optional<visuals::EntityRenderKey> removedKey;
         if (auto const renderKey = mEntityRenderKeys.find(id); renderKey != mEntityRenderKeys.end()) {
             removedKey = renderKey->second;
@@ -7123,13 +7124,13 @@ bool ReplaySession::clearRecordedEntities() {
     gReplayHotbars.clear();
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
+    mAnimationSetupTicks.clear();
     if (mRecordedEntityIds.empty()) return true;
     if (!mNetworkHandler) return false;
 
     auto ids = std::move(mRecordedEntityIds);
     mRecordedEntityIds.clear();
     mHeldItemUse.clear();
-    mAnimationSetupTicks.clear();
     for (auto const& id : ids) {
         auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::RemoveActor);
         if (!packet || !packet->mHandler) return false;
