@@ -781,12 +781,8 @@ LL_TYPE_INSTANCE_HOOK(
 
     auto&      level    = *static_cast<LevelRendererPlayer*>(this);
     auto const position = ::glm::vec3{level.mCameraPos->x, level.mCameraPos->y, level.mCameraPos->z};
-    auto const target   = ::glm::vec3{
-        level.mCameraTargetPos->x,
-        level.mCameraTargetPos->y,
-        level.mCameraTargetPos->z,
-    };
-    auto const direction = normalized(target - position);
+    // The first-person target sits on the eye, so only the forward vector gives the view direction.
+    auto const direction = normalized({level.mCameraForward->x, level.mCameraForward->y, level.mCameraForward->z});
     if (finite(position) && finite(direction) && dot(direction, direction) > 0.5f) {
         keyframe::CameraRenderState nativeState{
             position.x,
