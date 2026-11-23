@@ -15,7 +15,12 @@ namespace playback::state::editing {
 // and returns the view's FOV as a std::optional<float>, empty when there is no view. A captured key only carries the
 // pose, so a track left at the default 70 zoomed the view in or out on its first key.
 template <class ViewFov>
-void addCameraKey(model::CameraEntity& camera, int tick, std::optional<model::CameraKeyframe> captured, ViewFov&& viewFov) {
+void addCameraKey(
+    model::CameraEntity&                 camera,
+    int                                  tick,
+    std::optional<model::CameraKeyframe> captured,
+    ViewFov&&                            viewFov
+) {
     if (camera.keysByTick.empty() && !model::hasKeys(camera.channels, model::CameraProperty::Fov)) {
         if (std::optional<float> const fov = viewFov()) camera.fov = *fov;
     }
