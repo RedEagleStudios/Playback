@@ -297,11 +297,10 @@ private:
     std::atomic<uint64_t>                       mObserverServerSyncEpoch{0};
     std::atomic<uint64_t>                       mObserverServerSyncSequence{0};
     std::optional<int>                          mReplayTime;
-    // Project world overrides (setWorldOverrides). mSavedRenderClouds holds the viewer's own option while hidden.
+    // Project world overrides (setWorldOverrides).
     std::optional<int>                          mTimeOfDayOverride;
     bool                                        mFreezeTimeOverride{true};
     bool                                        mHideClouds{};
-    std::optional<bool>                         mSavedRenderClouds;
     // The project's weather (setWeatherOverride), and the recording's rain and lightning targets while overridden.
     std::optional<state::editing::model::WeatherStyle> mWeatherOverride;
     std::optional<std::pair<float, float>>             mRecordedWeather;
@@ -693,8 +692,6 @@ private:
     void restoreFollowedPlayerHud();
     // The level clock the replay shows: the recorded time, or the project's time-of-day override.
     [[nodiscard]] std::optional<int> effectiveReplayTime() const;
-    void                             applyCloudOverride();
-    void                             restoreClouds();
     // Holds the replay dimension's weather at the project's override; with none, hands back the recording's.
     void applyWeatherOverride();
     // A recorded weather event just moved the client's weather: that is the recording's now, kept for when the
@@ -807,6 +804,9 @@ public:
     void updateFrame();
 
     [[nodiscard]] bool isActive() const { return mActive; }
+    // The project hides the clouds: the renderer leaves them out of the replay's views, and the cloud shadows they
+    // cast with them. The viewer's own clouds option stays as it is.
+    [[nodiscard]] bool hidesClouds() const { return mActive && mHideClouds; }
     [[nodiscard]] bool isReadyForExport() const {
         return mActive && mReplayWorldJoined && mWorldReady && !mReplayFailed && mReplayPlayer && mNetworkHandler
             && !mPendingReplayDimension && !mApplyingChunkSnapshot && !mChunkInjectionPending;
