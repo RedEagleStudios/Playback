@@ -103,6 +103,9 @@ public:
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
     [[nodiscard]] Rect        viewportOverlayRect() const { return mViewportPanel.overlayRect(); }
+    [[nodiscard]] std::optional<float> takePreviewFrameAspectRequest() {
+        return mViewportPanel.takeFrameAspectRequest();
+    }
 
     // Every Present, whether or not the editor draws: puts the viewport's shading in place while a replay is open, and
     // gives Arke the user's own setting back once it closes. While the export dialog is open or an export runs, the

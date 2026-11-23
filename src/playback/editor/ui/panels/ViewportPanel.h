@@ -10,6 +10,7 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace playback::editor::ui {
 
@@ -23,6 +24,11 @@ public:
     // Floating transport capsule over the video; empty when the viewport is not maximized.
     [[nodiscard]] Rect        overlayRect() const { return mOverlayRect; }
     [[nodiscard]] ImTextureID gameTexture() const { return mGameTexture; }
+    // The frame aspect the last draw asked the game to render a band at (wider than the window), and forgets it, so a
+    // viewport not drawn since asks for nothing.
+    [[nodiscard]] std::optional<float> takeFrameAspectRequest() {
+        return std::exchange(mFrameAspectRequest, std::nullopt);
+    }
 
     [[nodiscard]] bool isInfoOverlayVisible() const { return mInfoOverlayVisible; }
     void               setInfoOverlayVisible(bool visible) { mInfoOverlayVisible = visible; }
@@ -41,9 +47,11 @@ private:
     ImTextureID       mGameTexture{};
     float             mVideoAspectRatio{16.0f / 9.0f};
     Rect              mVideoRect{};
-    // The whole window frame at the video frame's height; projections map onto it, the video rect crops it.
+    // Where the camera's view lands: the whole window frame at the video frame's height, which the video rect crops,
+    // or the video rect itself while the game renders the frame's band.
     Rect              mImageRect{};
     Rect              mOverlayRect{};
+    std::optional<float> mFrameAspectRequest;
     CameraPathOverlay mCameraPath;
     bool              mInfoOverlayVisible{true};
     bool              mAutoPreview{true};

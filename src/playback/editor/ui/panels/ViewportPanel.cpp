@@ -1,6 +1,7 @@
 ﻿#include "ViewportPanel.h"
 
 #include "playback/editor/graphics/BlurEffects.h"
+#include "playback/editor/graphics/PreviewFrameAspect.h"
 #include "playback/editor/input/FlySpeed.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/Widgets.h"
@@ -165,19 +166,24 @@ void ViewportPanel::draw(PanelContext const& ctx, bool maximized) {
     mVideoRect = {videoMin, videoMax};
 
     // The game renders the whole window, and an export of any shape keeps the window's vertical view (Bedrock's FOV is
-    // vertical), so the window frame is drawn at the frame's height and cut to its width: a narrower frame (9:16) is
-    // an exact centred crop; a wider one shows dark sides where the export sees past the window's edges.
+    // vertical). A narrower frame (9:16) is an exact centred crop of the window. A wider one (21:9, 2.39:1) sees past
+    // the window's sides, so the game renders it into a centred band of the window at the frame's shape
+    // (PreviewFrameAspect.h), and the frame shows that band; until the band is up, the window frame shows at the
+    // frame's height with dark sides.
     ImVec2 const displaySize = ImGui::GetIO().DisplaySize;
     float const  gameAspect  = displaySize.x / std::max(1.0f, displaySize.y);
-    ImVec2 const imageSize(videoSize.y * gameAspect, videoSize.y);
+    mFrameAspectRequest      = mVideoAspectRatio > gameAspect ? std::optional{mVideoAspectRatio} : std::nullopt;
+    auto const   band        = graphics::previewFrameBand();
+    bool const   banded      = band && std::abs(band->aspect - mVideoAspectRatio) < 0.001f;
+    ImVec2 const imageSize   = banded ? videoSize : ImVec2(videoSize.y * gameAspect, videoSize.y);
     ImVec2 const imageMin(videoMin.x + (videoSize.x - imageSize.x) * 0.5f, videoMin.y);
     mImageRect = {imageMin, {imageMin.x + imageSize.x, videoMax.y}};
 
     if (mGameTexture) {
         float const  shownMinX = std::max(videoMin.x, imageMin.x);
         float const  shownMaxX = std::min(videoMax.x, imageMin.x + imageSize.x);
-        ImVec2 const uvMin((shownMinX - imageMin.x) / imageSize.x, 0.0f);
-        ImVec2 const uvMax((shownMaxX - imageMin.x) / imageSize.x, 1.0f);
+        ImVec2 const uvMin((shownMinX - imageMin.x) / imageSize.x, banded ? band->top : 0.0f);
+        ImVec2 const uvMax((shownMaxX - imageMin.x) / imageSize.x, banded ? band->bottom : 1.0f);
         drawList->AddImage(ImTextureRef(mGameTexture), {shownMinX, videoMin.y}, {shownMaxX, videoMax.y}, uvMin, uvMax);
         // Layers over the picture, framed like the export: the camera's view spans the whole game image.
         if (auto const* project = ctx.project()) {

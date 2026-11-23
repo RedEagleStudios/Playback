@@ -6,6 +6,7 @@
 #include "playback/editor/graphics/D3D12Downsampler.h"
 #include "playback/editor/graphics/D3D12FrameTapBackend.h"
 #include "playback/editor/graphics/D3D12Hooks.h"
+#include "playback/editor/graphics/PreviewFrameAspect.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
 
 #include "playback/Playback.h"
@@ -794,21 +795,25 @@ struct ImGuiRenderer::Impl {
         };
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
+        std::optional<float> previewFrameAspect;
         if (state.browser.visible) {
             replayBrowser.draw(state.browser, submit);
         } else if (state.editorVisible || exportFrame) {
             replayEditor.setGameTexture(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
             replayEditor.draw(state, submit);
+            auto const frameAspect = replayEditor.takePreviewFrameAspectRequest();
             if (exporting::isExportActive(state.exportStatus.state)) {
                 setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
                 setReplayGameViewportExclusion(0.0f, 0.0f, 0.0f, 0.0f);
             } else {
-                auto viewport = replayEditor.viewportVideoRect();
+                previewFrameAspect = frameAspect;
+                auto viewport      = replayEditor.viewportVideoRect();
                 setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
                 auto overlay = replayEditor.viewportOverlayRect();
                 setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
         }
+        requestPreviewFrameAspect(previewFrameAspect);
         playback::screen::drawRecordDialogs();
         endReplayMouseFrame(getSwapChainWindow(sc));
         ImGui::Render();
@@ -1501,6 +1506,9 @@ bool ImGuiRenderer::renderInternal(
         if (!forceExportOverlay || !exportOverlay) p.resetExportSurface();
         // Also when the editor is not drawn, so the user's own shader setting comes back as the replay closes.
         ui::ReplayEditor::getInstance().syncViewShading(state);
+        // The viewport asks for a wide frame's band each time it draws; with the editor closed the game gets its
+        // window.
+        if (!editorOpen) requestPreviewFrameAspect(std::nullopt);
     }
 
     auto const browserRevision = allowUi && state.browser.snapshot ? state.browser.snapshot->revision : 0;
@@ -1640,6 +1648,7 @@ bool ImGuiRenderer::renderInternal(
         };
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
+        std::optional<float> previewFrameAspect;
         if (state.browser.visible) {
             replayBrowser.draw(state.browser, submit);
         } else if (state.editorVisible || exportOverlay) {
@@ -1650,16 +1659,19 @@ bool ImGuiRenderer::renderInternal(
                 textureIndex ? static_cast<ImTextureID>(p.frames[*textureIndex].gameSrvGpu.ptr) : ImTextureID{}
             );
             replayEditor.draw(state, submit);
+            auto const frameAspect = replayEditor.takePreviewFrameAspectRequest();
             if (exporting::isExportActive(state.exportStatus.state)) {
                 setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
                 setReplayGameViewportExclusion(0.0f, 0.0f, 0.0f, 0.0f);
             } else {
-                auto viewport = replayEditor.viewportVideoRect();
+                previewFrameAspect = frameAspect;
+                auto viewport      = replayEditor.viewportVideoRect();
                 setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
                 auto overlay = replayEditor.viewportOverlayRect();
                 setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
         }
+        requestPreviewFrameAspect(previewFrameAspect);
         playback::screen::drawRecordDialogs();
         endReplayMouseFrame(getSwapChainWindow(swapChain));
         ImGui::Render();
