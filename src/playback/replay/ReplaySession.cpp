@@ -116,8 +116,6 @@
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/network/packet/UpdateSubChunkNetworkBlockInfo.h"
 #include "mc/network/packet/cerealize/core/SerializationMode.h"
-#include "mc/options/option_types/BoolOption.h"
-#include "mc/options/option_types/OptionID.h"
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/resources/MinEngineVersion.h"
 #include "mc/resources/PackInstance.h"
@@ -339,15 +337,6 @@ void addRecordedBlockStates(::BlockType& type, ::BlockDescription const& descrip
     for (auto const& [traitName, trait] : *description.mTraits->mMap) {
         if (trait) trait->applyToBlockType(type);
     }
-}
-
-// The viewer's clouds option, changed without saving the options file: a crash while a project hides the clouds
-// must not leave them off.
-::BoolOption* renderCloudsOption() {
-    auto client = ll::service::getClientInstance();
-    if (!client) return nullptr;
-    auto const option = client->getOptions().getIfValid(::OptionID::RenderClouds);
-    return option ? static_cast<::BoolOption*>(*option) : nullptr;
 }
 
 constexpr std::string_view ReplayLevelIdPrefix        = "__playback_replay_world__";
@@ -1034,7 +1023,6 @@ bool ReplaySession::start(
 void ReplaySession::clearReplayData() {
     restoreFollowedPlayerHud();
     restoreObserverSkin();
-    restoreClouds();
     mVisualOverrides.restore();
     mTimeOfDayOverride.reset();
     mFreezeTimeOverride = true;
@@ -2217,25 +2205,6 @@ std::optional<int> ReplaySession::effectiveReplayTime() const {
     return day + *mTimeOfDayOverride + (mFreezeTimeOverride ? 0 : mCurrentTick);
 }
 
-void ReplaySession::applyCloudOverride() {
-    if (mHideClouds == mSavedRenderClouds.has_value()) return;
-    if (!mHideClouds) {
-        restoreClouds();
-        return;
-    }
-    auto       client = ll::service::getClientInstance();
-    auto const option = renderCloudsOption();
-    if (!client || !option) return;
-    mSavedRenderClouds = client->getOptions().getRenderClouds();
-    option->set(false, false);
-}
-
-void ReplaySession::restoreClouds() {
-    auto const saved = std::exchange(mSavedRenderClouds, std::nullopt);
-    if (!saved) return;
-    if (auto const option = renderCloudsOption()) option->set(*saved, false);
-}
-
 void ReplaySession::applyWeatherOverride() {
     if (!mReplayPlayer) return;
     auto* weather = mReplayPlayer->getDimension().mWeather.get();
@@ -3050,7 +3019,6 @@ void ReplaySession::tick() {
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
         if (auto const time = effectiveReplayTime(); time && mReplayPlayer) mReplayPlayer->getLevel().setTime(*time);
-        applyCloudOverride();
         applyWeatherOverride();
         applyPoseClips();
         flushDeferredControllerPackets();

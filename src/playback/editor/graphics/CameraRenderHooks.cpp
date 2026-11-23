@@ -837,6 +837,12 @@ LL_TYPE_INSTANCE_HOOK(
     ::ScreenContext&    screenContext,
     ::SubClientId       clientSubId
 ) {
+    // Hidden clouds leave the view's cloud pass out, which also takes their shadows off the world. The viewer's own
+    // clouds option is never touched, so no options save can keep the clouds off once the replay closes.
+    auto const hideClouds = [](::ViewRenderObject* result) {
+        if (result && replay::ReplaySession::getInstance().hidesClouds()) result->mViewData->mDrawClouds = false;
+        return result;
+    };
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (!context || context->source != keyframe::CameraTimelineSource::Export) {
         if (gFollowCamera) applyFollowCameraEcs(*gFollowCamera);
@@ -851,20 +857,20 @@ LL_TYPE_INSTANCE_HOOK(
                 std::nullopt
             );
         }
-        return result;
+        return hideClouds(result);
     }
     if (!context->sample) {
         logMissingSample(*context);
-        return origin(renderObject, screenContext, clientSubId);
+        return hideClouds(origin(renderObject, screenContext, clientSubId));
     }
 
     auto const& sample = *context->sample;
-    if (!finite(sample.state)) return origin(renderObject, screenContext, clientSubId);
+    if (!finite(sample.state)) return hideClouds(origin(renderObject, screenContext, clientSubId));
 
     auto const position = ::glm::vec3{sample.state.x, sample.state.y, sample.state.z};
     auto const basis    = basisFromState(sample.state);
     if (!finite(position) || !finite(basis.right) || !finite(basis.up) || !finite(basis.forward)) {
-        return origin(renderObject, screenContext, clientSubId);
+        return hideClouds(origin(renderObject, screenContext, clientSubId));
     }
 
     auto& level        = *static_cast<LevelRendererPlayer*>(this);
@@ -921,7 +927,7 @@ LL_TYPE_INSTANCE_HOOK(
             context->frameIndex
         );
     }
-    return result;
+    return hideClouds(result);
 }
 
 } // namespace
