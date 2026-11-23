@@ -1157,6 +1157,7 @@ void ReplaySession::clearReplayData() {
     mDeferredControllerPackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
+    mAnimationSetupTicks.clear();
     mRiderSeats.clear();
     mRecordedLocalPlayerId.reset();
     gReplayHandBobTick.clear();
@@ -3197,7 +3198,7 @@ void ReplaySession::tick() {
 
         bool const exportActive = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
         if (mIsPaused) {
-            levelFreeze.freeze = !exportActive;
+            levelFreeze.freeze = !exportActive && !needsAnimationSetupTick();
             holdItemUseBetweenTicks();
             return;
         }
@@ -3402,6 +3403,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mDeferredControllerPackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
+    mAnimationSetupTicks.clear();
     mRiderSeats.clear();
     mRecordedLocalPlayerId.reset();
     gReplayHandBobTick.clear();
@@ -4551,6 +4553,7 @@ void ReplaySession::resetDimensionScopedReplayState() {
     mDirectLevelChunkIndices.clear();
     mCenterChunkPositions.clear();
     mRecordedEntityIds.clear();
+    mAnimationSetupTicks.clear();
     mRiderSeats.clear();
     gReplayHandBobTick.clear();
     gReplayHotbars.clear();
@@ -5533,6 +5536,29 @@ void ReplaySession::syncLevelSimPause(bool freeze) {
     if (mLevelSimFrozen == freeze || !mReplayPlayer) return;
     mReplayPlayer->getLevel().setSimPaused(freeze);
     mLevelSimFrozen = freeze;
+}
+
+// An entity sets up its animations in a level tick after it is first drawn, and the native pause flag stops those
+// ticks. Entities a paused seek spawned were drawn without them until playback resumed: a bicycle and its rider
+// tumbled about a block up, a skateboard stood on end at its rider's head, and controller clips sent to them waited.
+// The paused level runs on until every drawn entity has them, a few ticks for each at most.
+bool ReplaySession::needsAnimationSetupTick() {
+    constexpr int MaxAnimationSetupTicks = 10;
+    if (!mReplayPlayer) return false;
+    auto& level   = mReplayPlayer->getLevel();
+    bool  pending = false;
+    for (auto const& id : mRecordedEntityIds) {
+        auto* actor = level.fetchEntity(id, false);
+        if (!actor) continue;
+        auto const& animation = actor->getAnimationComponent();
+        // A last update frame of -1 means it was never drawn; one out of view stays unset until it is.
+        if (animation.mAnimationComponentInitialized || animation.mLastUpdateFrame < 0) continue;
+        if (auto& ticks = mAnimationSetupTicks[id]; ticks < MaxAnimationSetupTicks) {
+            ++ticks;
+            pending = true;
+        }
+    }
+    return pending;
 }
 
 // The native pause flag leaves item-use ticking alone, which runs the use animation on between replay ticks.
@@ -7103,6 +7129,7 @@ bool ReplaySession::clearRecordedEntities() {
     auto ids = std::move(mRecordedEntityIds);
     mRecordedEntityIds.clear();
     mHeldItemUse.clear();
+    mAnimationSetupTicks.clear();
     for (auto const& id : ids) {
         auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::RemoveActor);
         if (!packet || !packet->mHandler) return false;
