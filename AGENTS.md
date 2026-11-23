@@ -29,7 +29,8 @@ xmake -y
 the flags xmake uses, read from `compile_commands.json` (generated on first use, and again when `xmake.lua` changes). A
 header is checked through the `.cpp` next to it. With the precompiled header from a previous build it takes 0.1-5 s for
 most files and about 12 s for `ReplaySession.cpp`, so run it on every file you touch before `xmake` and fix what it
-reports first. It needs `python3`; on Windows run it from Git Bash.
+reports first. It needs `python3`; on Windows run it from Git Bash. Prefer it to `xmake build --files=<file>`, which
+does not build the precompiled header and fails with "PCH file not found" after a clean or a `src/pch.h` change.
 
 ## Minecraft and LeviLamina APIs: look, don't guess
 
