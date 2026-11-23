@@ -1,5 +1,6 @@
 ﻿#include "CameraRenderHooks.h"
 #include "FogOverride.h"
+#include "PreviewFrameAspect.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
@@ -651,6 +652,8 @@ LL_TYPE_INSTANCE_HOOK(
 
     // Vanilla interpolates on the client tick, which only matches the replay tick at 1x; drive the pose ourselves.
     auto& replay = replay::ReplaySession::getInstance();
+    // A viewport frame wider than the window renders into a band of the window at the frame's shape.
+    applyPreviewFrameAspect(replay.isActive());
     // Native alpha keeps cycling while paused; pistons must hold the same fraction as the entity poses.
     integration::pushReplayPartial(replay.previewPartialTick());
     // The native hand animation reads the frame alpha, so a paused frame must not feed it the cycling value.

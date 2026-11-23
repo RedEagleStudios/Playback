@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
+#include "playback/editor/graphics/PreviewFrameAspect.h"
 #include "playback/exporting/GuiScaleHooks.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/GameAddress.h"
@@ -143,6 +144,8 @@ void OfflineRenderFrameExecutor::restoreClientThrottling() {
 }
 
 bool OfflineRenderFrameExecutor::configureRenderSize(ExportSettings const& settings) {
+    // The export renders its own frame; the preview's wide-frame band must not become the size it restores to.
+    editor::graphics::restorePreviewFrameAspect();
     if (settings.resolutionX == 0 && settings.resolutionY == 0) return true;
 
     auto client = ll::service::getClientInstance();
