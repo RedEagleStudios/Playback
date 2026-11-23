@@ -268,15 +268,13 @@ void writeCameraSpaces(
     writeCameraPose(worldCamera, position, basis);
 }
 
+// The renderer draws the world around mCameraTargetPos and the local cameras sit relative to it; a first-person view
+// keeps it on the eye. A target one block ahead drew the world from there, so playing pushed the view a block forward.
 void writeLevelCameraPose(LevelRendererPlayer& level, ::glm::vec3 const& position, CameraBasis const& basis) noexcept {
     level.mCameraPos       = Vec3{position.x, position.y, position.z};
-    level.mCameraTargetPos = Vec3{
-        position.x + basis.forward.x,
-        position.y + basis.forward.y,
-        position.z + basis.forward.z,
-    };
-    level.mCameraForward = Vec3{basis.forward.x, basis.forward.y, basis.forward.z};
-    level.mCameraUp      = Vec3{basis.up.x, basis.up.y, basis.up.z};
+    level.mCameraTargetPos = Vec3{position.x, position.y, position.z};
+    level.mCameraForward   = Vec3{basis.forward.x, basis.forward.y, basis.forward.z};
+    level.mCameraUp        = Vec3{basis.up.x, basis.up.y, basis.up.z};
 }
 
 // The export observer is teleported onto the sample and vanilla renders it; only roll needs the camera rewritten.
@@ -441,15 +439,10 @@ bool applyTimelineCamera(
     auto const clientCheck = clientCamera ? verifyCamera(*clientCamera, clientExpected, basis) : CameraVerification{};
     auto const worldCheck  = verifyCamera(*worldCamera, position, basis);
 
-    float const levelPositionError  = maxError(level.mCameraPos.get(), position);
-    float const levelDirectionError = maxError(
-        normalized({
-            level.mCameraTargetPos->x - level.mCameraPos->x,
-            level.mCameraTargetPos->y - level.mCameraPos->y,
-            level.mCameraTargetPos->z - level.mCameraPos->z,
-        }),
-        basis.forward
-    );
+    auto const& levelForward       = level.mCameraForward.get();
+    float const levelPositionError = maxError(level.mCameraPos.get(), position);
+    float const levelDirectionError =
+        maxError(normalized({levelForward.x, levelForward.y, levelForward.z}), basis.forward);
     bool const verified = setupCheck.valid() && (!clientCamera || clientCheck.valid()) && worldCheck.valid()
                        && levelPositionError <= PositionTolerance && levelDirectionError <= DirectionTolerance;
 
@@ -892,32 +885,26 @@ LL_TYPE_INSTANCE_HOOK(
         writeCameraSpaces({clientCamera, nullptr}, worldCamera, position, basis);
         writeLevelCameraPose(level, position, basis);
         view.mCameraPos       = position;
-        view.mCameraTargetPos = position + basis.forward;
+        view.mCameraTargetPos = position;
     }
 
     bool verified = vanillaViewReachedSample(level, position, basis)
                  && maxError(view.mCameraPos.get(), position) <= PositionTolerance;
     if (rolled) {
-        auto const  worldCheck          = verifyCamera(worldCamera, position, basis);
-        float const levelPositionError  = maxError(level.mCameraPos.get(), position);
-        float const levelDirectionError = maxError(
-            normalized({
-                level.mCameraTargetPos->x - level.mCameraPos->x,
-                level.mCameraTargetPos->y - level.mCameraPos->y,
-                level.mCameraTargetPos->z - level.mCameraPos->z,
-            }),
-            basis.forward
-        );
+        auto const  worldCheck         = verifyCamera(worldCamera, position, basis);
+        auto const& levelForward       = level.mCameraForward.get();
+        float const levelPositionError = maxError(level.mCameraPos.get(), position);
+        float const levelDirectionError =
+            maxError(normalized({levelForward.x, levelForward.y, levelForward.z}), basis.forward);
         float const viewPositionError = maxError(view.mCameraPos.get(), position);
-        float const viewDirectionError =
-            maxError(normalized(view.mCameraTargetPos.get() - view.mCameraPos.get()), basis.forward);
-        bool const nausea = visuals::isReplayNauseaDistortionActive();
-        verified          = worldCheck.publicPositionError <= PositionTolerance
-                && worldCheck.publicDirectionError <= DirectionTolerance
-                && worldCheck.viewPositionError <= PositionTolerance
-                && (nausea || worldCheck.viewDirectionError <= DirectionTolerance)
-                && levelPositionError <= PositionTolerance && levelDirectionError <= DirectionTolerance
-                && viewPositionError <= PositionTolerance && viewDirectionError <= DirectionTolerance;
+        float const viewTargetError   = maxError(view.mCameraTargetPos.get(), position);
+        bool const  nausea            = visuals::isReplayNauseaDistortionActive();
+        verified                      = worldCheck.publicPositionError <= PositionTolerance
+                                     && worldCheck.publicDirectionError <= DirectionTolerance
+                                     && worldCheck.viewPositionError <= PositionTolerance
+                                     && (nausea || worldCheck.viewDirectionError <= DirectionTolerance)
+                                     && levelPositionError <= PositionTolerance && levelDirectionError <= DirectionTolerance
+                                     && viewPositionError <= PositionTolerance && viewTargetError <= PositionTolerance;
     }
 
     if (verified && context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
