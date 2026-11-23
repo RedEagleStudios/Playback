@@ -2,9 +2,11 @@ on:
   pull_request:
     branches:
       - main
+      - re-main
   push:
     branches:
       - main
+      - re-main
   workflow_dispatch:
 
 permissions:
@@ -64,6 +66,12 @@ jobs:
 
       - run: |
           xmake -v -y
+        env:
+          XMAKE_PKG_CACHEDIR: ${{ runner.temp }}/xmake-package-cache-${{ github.run_id }}
+
+      - name: Unit tests
+        run: |
+          xmake test -v -y
         env:
           XMAKE_PKG_CACHEDIR: ${{ runner.temp }}/xmake-package-cache-${{ github.run_id }}
 
