@@ -2646,10 +2646,12 @@ void ReplaySession::endExportTimeline() {
     mExportTimelinePhase    = ReplayExportTimelinePhase::Inactive;
     mExportCameraViewpoint.reset();
     mExportScreenTime.reset();
-    // An export ticks the level live, so the entities it drew have set up; a setup window opened by its seek (or one
-    // left from before it) must not unfreeze the pause it ends in.
-    mAnimationSetupTicks = 0;
     if (wasActive) {
+        // The pause an export ends in gets a fresh setup window, like a paused seek landing; a window opened by its
+        // seek, or left from before it, does not carry over. After a full export every drawn entity has set up, so
+        // the first paused tick closes the window without ticking; one that ended early (cancelled or failed) can
+        // leave entities its seek spawned without their animations, and those get their ticks.
+        mAnimationSetupTicks = mIsPaused ? MaxAnimationSetupTicks : 0;
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
         mObserverServerPositionDirty = false;
         mLastObserverServerSyncChunk.reset();
