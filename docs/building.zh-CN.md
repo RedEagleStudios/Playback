@@ -51,6 +51,21 @@ Xmake 会使用 x264 构建固定版本的 FFmpeg 7.1 命令行运行时，并�
 
 Release 工作流以标签源码构建，将标签传给 `PLAYBACK_VERSION`，从 `CHANGELOG.md` 提取对应版本说明，并上传 `Playback-client-windows-x64.zip` 和 `playback-ui.mcpack`。每个标签应指向匹配的版本分支。本地整理提交和标签不会发布内容，发布 GitHub Release 才会触发工作流。
 
+## 开发构建
+
+日常的修改、构建、测试循环请配置 `dev` 模式：即不开优化的 Release 构建，宏定义和运行库与 Release 相同。不要发布或用 `dev` 构建做性能测试。
+
+```powershell
+xmake f -y -p windows -a x64 -m dev --target_type=client
+xmake -y
+```
+
+- `dev` 构建只在代码引用的游戏符号集合变化时才重新运行 LeviLamina 的 prelink 步骤（需要 LLVM 自带的 `llvm-nm`；没有时与 `release` 一样每次链接都运行）。
+- `src/pch.h` 是强制包含到每个源文件的预编译头。修改它会重新编译全部文件，因此只放稳定的第三方头文件。
+- `scripts/check-file.sh <文件>...` 用与构建完全相同的参数在几秒内检查单个文件，无需构建（需要 `python3`；Windows 上请在 Git Bash 中运行）。
+
+在 Linux 上可以用 clang-cl、lld-link 和 [xwin](https://github.com/Jake-Shadle/xwin) 提供的 Windows SDK 交叉编译：在 `xmake f` 中加入 `--toolchain=clang-cl --sdk=<xwin 目录>`，并加入 `--ffmpeg_exe=<ffmpeg.exe 路径>`，因为 FFmpeg 包需要在 Windows 主机上用 MSYS2 构建。
+
 ## 刷新依赖
 
 如果 prelink 报告无法找到 `bedrock_runtime_data`，请刷新包配置并重新构建：
