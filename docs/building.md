@@ -51,6 +51,21 @@ After building, verify `bin/playback/manifest.json` matches the selected version
 
 The release workflow builds the tagged source with `PLAYBACK_VERSION` set to the tag, reads that version's notes from `CHANGELOG.md`, and uploads `Playback-client-windows-x64.zip` and `playback-ui.mcpack`. Keep each tag on its matching version branch. Preparing a local commit or tag does not publish it; publishing a GitHub Release triggers the workflow.
 
+## Development Builds
+
+For an edit-build-test loop, configure the `dev` mode: the release build without optimisation, with the same defines and runtime. Do not ship or profile a `dev` build.
+
+```powershell
+xmake f -y -p windows -a x64 -m dev --target_type=client
+xmake -y
+```
+
+- A `dev` build reruns LeviLamina's prelink step only when the set of game symbols the code uses changes (it needs `llvm-nm`, which comes with LLVM; without it prelink runs on every link, as in `release`).
+- `src/pch.h` is a precompiled header force-included into every source file. Changing it rebuilds everything, so it holds only stable third-party headers.
+- `scripts/check-file.sh <file>...` checks single files with the build's exact flags in seconds, without building (needs `python3`; Git Bash on Windows).
+
+On Linux the same project cross-compiles with clang-cl, lld-link and an [xwin](https://github.com/Jake-Shadle/xwin) Windows SDK: add `--toolchain=clang-cl --sdk=<xwin dir>` to `xmake f`, and `--ffmpeg_exe=<path to ffmpeg.exe>`, because the FFmpeg package build needs MSYS2 on a Windows host.
+
 ## Refresh Dependencies
 
 If prelink reports that `bedrock_runtime_data` cannot be found, refresh the package configuration and rebuild:
