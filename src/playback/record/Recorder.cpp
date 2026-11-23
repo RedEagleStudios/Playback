@@ -7,6 +7,7 @@
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/record/ChunkMutationBarrier.h"
+#include "playback/record/ControllerTransitions.h"
 #include "playback/runtime/GameAddress.h"
 #include "playback/utils/MapItemId.h"
 #include "playback/utils/PathUtils.h"
@@ -2968,24 +2969,16 @@ void Recorder::trackControllerTransitions(Packet const& packet) {
     if (animate.mController->empty()) return;
     std::scoped_lock lock(mControllerTransitionsMutex);
     for (auto const& id : *animate.mRuntimeIds) {
-        auto& transitions = mControllerTransitions[id.rawID];
-        // The client appends every transition, and a state may have two to the same target (Ore Fusion's attacks go to
-        // their hold when the hammer is put away and when the attack ends). An exact repeat, such as a controller sent
-        // again on the next equip, adds no transition but is now the latest: the snapshot replays the list in order and
-        // the client ends each controller on the last one it gets. Kept where it first came, a bicycle stance sent
-        // again on mounting lost to a stale one from an earlier ride, and the replayed rider held the air pose.
-        auto const repeated = std::ranges::find_if(transitions, [&](ControllerTransition const& transition) {
-            return transition.controller == *animate.mController && transition.state == *animate.mAnimation
-                && transition.nextState == *animate.mNextState && transition.stopExpression == *animate.mStopExpression;
-        });
-        if (repeated != transitions.end()) transitions.erase(repeated);
-        transitions.push_back(
-            {*animate.mController,
-             *animate.mAnimation,
-             *animate.mNextState,
-             *animate.mStopExpression,
-             animate.mStopExpressionVersion,
-             animate.mBlendOutTime}
+        addControllerTransition(
+            mControllerTransitions[id.rawID],
+            ControllerTransition{
+                *animate.mController,
+                *animate.mAnimation,
+                *animate.mNextState,
+                *animate.mStopExpression,
+                animate.mStopExpressionVersion,
+                animate.mBlendOutTime
+            }
         );
     }
 }
