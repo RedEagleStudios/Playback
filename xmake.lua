@@ -1,5 +1,12 @@
 add_rules("mode.debug", "mode.release")
 
+-- dev: the release build without optimisation, for edit-build-test loops (xmake f -m dev). It keeps release's defines
+-- and runtime, so the mod behaves the same in game; only code generation differs. Release and CI builds are unchanged.
+if is_mode("dev") then
+    set_optimize("none")
+    add_defines("NDEBUG")
+end
+
 add_repositories("levimc-repo https://github.com/LiteLDev/xmake-repo.git")
 
 package("playback-ffmpeg")
@@ -43,6 +50,100 @@ option("ffmpeg_exe")
     set_showmenu(true)
     set_description("Prebuilt ffmpeg.exe to bundle instead of building the playback-ffmpeg package")
 option_end()
+
+-- xmake (through 3.1.2) keeps clang-cl's /clang:-MMD depfile without joining its "\"-continued lines, so every
+-- multi-line depfile lists a "\" dependency. On a Linux host that file never exists and every object recompiles on
+-- every build. Join the lines the previous build left before xmake checks them (the prepare stage ends before the build
+-- stage, which also builds the precompiled header), keeping each depfile's mtime, which xmake compares with the sources'.
+rule("playback.depfiles")
+    before_prepare(function (target)
+        local objectfiles = table.join(target:objectfiles(), target:pcoutputfile("cxx") or {})
+        for _, objectfile in ipairs(objectfiles) do
+            local dependfile = target:dependfile(objectfile)
+            local dependinfo = os.isfile(dependfile) and io.load(dependfile)
+            local depfiles   = dependinfo and dependinfo.depfiles_format == "gcc" and dependinfo.depfiles
+            if depfiles and depfiles:find("\\\n", 1, true) then
+                local mtime = os.mtime(dependfile)
+                dependinfo.depfiles = depfiles:gsub("\\\r?\n", "")
+                io.save(dependfile, dependinfo)
+                os.touch(dependfile, {mtime = mtime})
+            end
+        end
+    end)
+rule_end()
+
+-- dev only, in place of @levibuildscript/linkrule. That rule runs prelink.exe (under Wine on Linux, about 25 s) on every
+-- relink to generate bedrock_runtime_api.lib, the import stubs for the game symbols the objects use. The library only
+-- depends on those symbols and the input libraries, so this runs prelink the same way but only when the objects'
+-- undefined symbols or an input library change, and keeps the library between builds. Without llvm-nm it always runs.
+rule("playback.devprelink")
+    on_config(function (target)
+        target:add("shflags", "/DELAYLOAD:bedrock_runtime.dll")
+    end)
+    before_link(function (target)
+        import("lib.detect.find_file")
+        import("lib.detect.find_tool")
+        import("core.project.config")
+        import("core.project.depend")
+
+        local outdir  = path.join(config.builddir(), ".prelink")
+        local libdir  = path.join(outdir, "lib")
+        local libfile = path.join(libdir, "bedrock_runtime_api.lib")
+        os.mkdir(libdir)
+
+        local envs        = os.joinenvs(target:pkgenvs(), os.getenvs())
+        local searchpaths = path.splitenv(envs.PATH or envs.Path or envs.path or "")
+        local data        = assert(find_file("bedrock_runtime_data", searchpaths), "Cannot find bedrock_runtime_data")
+        local prelink     = assert(find_file("prelink.exe", searchpaths), "Cannot find prelink.exe")
+
+        local libraries = {}
+        for _, dep in ipairs(target:orderdeps()) do
+            if dep:kind() == "static" and os.isfile(dep:targetfile()) then
+                table.insert(libraries, dep:targetfile())
+            end
+        end
+        for _, pkg in ipairs(target:orderpkgs()) do
+            for _, linkdir in ipairs(pkg:get("linkdirs")) do
+                for _, link in pairs(pkg:get("links")) do
+                    local libraryfile = path.join(linkdir, link .. ".lib")
+                    if os.isfile(libraryfile) then
+                        table.insert(libraries, libraryfile)
+                    end
+                end
+            end
+        end
+        local inputs = table.join(target:objectfiles(), libraries)
+
+        local symbols = "unknown"
+        local nm      = find_tool("llvm-nm")
+        if nm then
+            local listing = os.iorunv(nm.program, table.join("--undefined-only", "--just-symbol-name", target:objectfiles()))
+            local names   = {}
+            for _, line in ipairs(listing:split("\n", {plain = true})) do
+                if line ~= "" and not line:endswith(":") then
+                    table.insert(names, line)
+                end
+            end
+            table.sort(names)
+            symbols = hash.strhash128(table.concat(names, "\n"))
+        end
+
+        depend.on_changed(function ()
+            print("Running prelink...")
+            os.execv(prelink, table.join(
+                string.format("%s-%s-%s", config.get("target_type"), config.get("plat"), config.get("arch")),
+                outdir, data, inputs))
+        end, {
+            dependfile = path.join(outdir, "prelink.d"),
+            changed    = target:is_rebuilt() or not os.isfile(libfile) or symbols == "unknown",
+            values     = {prelink, data, symbols},
+            files      = libraries
+        })
+
+        target:add("linkdirs", libdir)
+        target:add("links", "bedrock_runtime_api")
+    end)
+rule_end()
 
 add_requires("levilamina 26.60.*", {configs = {target_type = get_config("target_type")}})
 
@@ -92,7 +193,11 @@ local get_version = function(os)
 end
 
 target("playback")
-    add_rules("@levibuildscript/linkrule")
+    if is_mode("dev") then
+        add_rules("playback.devprelink")
+    else
+        add_rules("@levibuildscript/linkrule")
+    end
     if is_plat("windows") then
         add_defines("NOMINMAX", "UNICODE")
         set_exceptions("none") -- To avoid conflicts with /EHa.
@@ -128,6 +233,8 @@ target("playback")
     add_headerfiles("src/**.h")
     add_files("src/**.cpp")
     add_includedirs("src")
+    set_pcxxheader("src/pch.h")
+    add_rules("playback.depfiles")
     set_symbols("debug")
     on_load(function (target)
         target:add("rules", "@levibuildscript/modpacker", {
