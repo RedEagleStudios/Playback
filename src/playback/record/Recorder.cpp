@@ -2970,13 +2970,15 @@ void Recorder::trackControllerTransitions(Packet const& packet) {
     for (auto const& id : *animate.mRuntimeIds) {
         auto& transitions = mControllerTransitions[id.rawID];
         // The client appends every transition, and a state may have two to the same target (Ore Fusion's attacks go to
-        // their hold when the hammer is put away and when the attack ends). Only an exact repeat, such as a controller
-        // sent again on the next equip, adds nothing.
-        bool const repeated = std::ranges::any_of(transitions, [&](ControllerTransition const& transition) {
+        // their hold when the hammer is put away and when the attack ends). An exact repeat, such as a controller sent
+        // again on the next equip, adds no transition but is now the latest: the snapshot replays the list in order and
+        // the client ends each controller on the last one it gets. Kept where it first came, a bicycle stance sent
+        // again on mounting lost to a stale one from an earlier ride, and the replayed rider held the air pose.
+        auto const repeated = std::ranges::find_if(transitions, [&](ControllerTransition const& transition) {
             return transition.controller == *animate.mController && transition.state == *animate.mAnimation
                 && transition.nextState == *animate.mNextState && transition.stopExpression == *animate.mStopExpression;
         });
-        if (repeated) continue;
+        if (repeated != transitions.end()) transitions.erase(repeated);
         transitions.push_back(
             {*animate.mController,
              *animate.mAnimation,
