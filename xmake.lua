@@ -158,6 +158,7 @@ add_requires("mbedtls v3.6.7")
 add_requires("libzip")
 add_requires("imgui v1.92.7", {configs = {dx11 = true, dx12 = true}})
 add_requires("cpp-httplib")
+add_requires("doctest 2.4.12", {configs = {cmake = false}})
 if not has_config("ffmpeg_exe") then
     add_requires("playback-ffmpeg 7.1", {
         configs = {
@@ -306,3 +307,22 @@ target("playback")
             cprint("${bright green}[Playback]: ${reset}Standalone UI resource pack generated to " .. mcpack)
         end
     end)
+
+-- Unit tests for Playback logic that runs without the game (tests/*.cpp plus the game-free sources they cover). Not part
+-- of the default build: `xmake test` builds and runs them. The test binary is a Windows executable; on Linux it runs
+-- through Wine.
+target("playback_tests")
+    set_kind("binary")
+    set_default(false)
+    set_languages("c++20")
+    if is_plat("windows") then
+        add_defines("NOMINMAX", "UNICODE")
+        add_cxflags("/EHsc", "/utf-8", "/W4")
+        set_toolchains("clang-cl")
+    end
+    add_rules("playback.depfiles")
+    add_packages("doctest")
+    add_includedirs("src")
+    add_files("tests/*.cpp")
+    add_files("src/playback/keyframe/KeyframeTrack.cpp", "src/playback/keyframe/CameraKeyframeChange.cpp")
+    add_tests("unit")
