@@ -25,12 +25,15 @@ package("playback-ffmpeg")
         local msys2      = assert(package:dep("msys2"), "MSYS2 dependency was not resolved")
         local msys2_base = assert(msys2:dep("msys2-base"), "MSYS2 base dependency was not resolved")
         local bash        = path.join(msys2_base:installdir("usr", "bin"), "bash.exe")
+        -- xmake-repo's ffmpeg install runs uchardet from configure. MSYS2 no longer packages it for MINGW64, so install
+        -- the UCRT64 build and put a wrapper on the PATH; the executable finds its DLLs in its own directory.
         os.vrunv(bash, {
             "-leo",
             "pipefail",
             "-c",
-            "pacman --noconfirm -S --needed --overwrite '*' make mingw-w64-x86_64-uchardet " ..
-                "mingw-w64-x86_64-gcc mingw-w64-x86_64-iconv mingw-w64-x86_64-pkgconf"
+            "pacman --noconfirm -S --needed --overwrite '*' make mingw-w64-ucrt-x86_64-uchardet " ..
+                "mingw-w64-x86_64-gcc mingw-w64-x86_64-iconv mingw-w64-x86_64-pkgconf && " ..
+                "printf '#!/bin/sh\\nexec /ucrt64/bin/uchardet \"$@\"\\n' > /usr/bin/uchardet && chmod +x /usr/bin/uchardet"
         })
         package:base():script("install")(package)
     end)
