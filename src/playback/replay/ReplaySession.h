@@ -426,8 +426,8 @@ private:
     int                                                         mReplaySubjectEntityMissingLastTick{-1};
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     bool                                                        mLevelSimFrozen{false};
-    // Paused client ticks the level ran so each drawn entity could set up its animations.
-    std::unordered_map<ActorUniqueID, int>                      mAnimationSetupTicks;
+    // Paused ticks left in which the level may run on after a seek, so the entities it spawned set up their animations.
+    int                                                         mAnimationSetupTicks{0};
     // Item-use duration each recorded player had after the last replay tick; the client ticks it between ticks too.
     struct HeldItemUse {
         void const* item{};
@@ -677,7 +677,7 @@ private:
 
     void holdItemUseBetweenTicks();
 
-    // Whether a paused level should run this tick so entities drawn since a seek set up their animations.
+    // Whether a paused level should run this tick so entities a seek spawned set up their animations.
     [[nodiscard]] bool needsAnimationSetupTick();
 
     void rememberReplayPlayer(std::string uuid, std::string name, ActorUniqueID id, bool recorder);

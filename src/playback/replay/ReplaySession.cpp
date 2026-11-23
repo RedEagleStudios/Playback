@@ -363,6 +363,8 @@ constexpr std::array PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 1
 // A seek keeps only the particle events from this many ticks before its landing, and ticks the level once per replay
 // tick across them. Emitters such as lingering clouds are spawned by actor ticks and live about 27 ticks.
 constexpr int SeekParticleWindowTicks = 40;
+// Paused ticks the level may run on after a seek lands, so the entities it spawned set up their animations.
+constexpr int MaxAnimationSetupTicks = 10;
 
 bool isSuccessfulSubChunkResult(SubChunkPacket::SubChunkRequestResult result) {
     return result == SubChunkPacket::SubChunkRequestResult::Success
@@ -1157,7 +1159,7 @@ void ReplaySession::clearReplayData() {
     mDeferredControllerPackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
-    mAnimationSetupTicks.clear();
+    mAnimationSetupTicks = 0;
     mRiderSeats.clear();
     mRecordedLocalPlayerId.reset();
     gReplayHandBobTick.clear();
@@ -2697,6 +2699,7 @@ void ReplaySession::finishSeek() {
     // Export seeks never tick the level during catch-up, so they always drop the particles it piled up.
     if (mExportSeekRequested) mSeekParticlesStale = true;
     mSeekTargetTick         = -1;
+    mAnimationSetupTicks    = MaxAnimationSetupTicks;
     // The clips the catch-up started play from 0 on the client; resumeSeekAnimationClips sets their clocks.
     mPendingAnimationClips.clear();
     for (auto& [_, clip] : mSeekAnimationClips) mPendingAnimationClips.push_back(std::move(clip));
@@ -3403,7 +3406,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mDeferredControllerPackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
-    mAnimationSetupTicks.clear();
+    mAnimationSetupTicks = 0;
     mRiderSeats.clear();
     mRecordedLocalPlayerId.reset();
     gReplayHandBobTick.clear();
@@ -4553,7 +4556,6 @@ void ReplaySession::resetDimensionScopedReplayState() {
     mDirectLevelChunkIndices.clear();
     mCenterChunkPositions.clear();
     mRecordedEntityIds.clear();
-    mAnimationSetupTicks.clear();
     mRiderSeats.clear();
     gReplayHandBobTick.clear();
     gReplayHotbars.clear();
@@ -5541,24 +5543,25 @@ void ReplaySession::syncLevelSimPause(bool freeze) {
 // An entity sets up its animations in a level tick after it is first drawn, and the native pause flag stops those
 // ticks. Entities a paused seek spawned were drawn without them until playback resumed: a bicycle and its rider
 // tumbled about a block up, a skateboard stood on end at its rider's head, and controller clips sent to them waited.
-// The paused level runs on until every drawn entity has them, a few ticks for each at most.
+// Only right after a seek lands does the paused level run on (as it did through the catch-up) until every drawn entity
+// has them, a few ticks at most: a level tick also advances the clips and particles of every other actor, which a
+// settled pause must hold.
 bool ReplaySession::needsAnimationSetupTick() {
-    constexpr int MaxAnimationSetupTicks = 10;
-    if (!mReplayPlayer) return false;
-    auto& level   = mReplayPlayer->getLevel();
-    bool  pending = false;
-    for (auto const& id : mRecordedEntityIds) {
+    if (mAnimationSetupTicks <= 0 || !mReplayPlayer) return false;
+    auto&      level   = mReplayPlayer->getLevel();
+    bool const pending = std::ranges::any_of(mRecordedEntityIds, [&](ActorUniqueID id) {
         auto* actor = level.fetchEntity(id, false);
-        if (!actor) continue;
+        if (!actor) return false;
         auto const& animation = actor->getAnimationComponent();
-        // A last update frame of -1 means it was never drawn; one out of view stays unset until it is.
-        if (animation.mAnimationComponentInitialized || animation.mLastUpdateFrame < 0) continue;
-        if (auto& ticks = mAnimationSetupTicks[id]; ticks < MaxAnimationSetupTicks) {
-            ++ticks;
-            pending = true;
-        }
+        // A last update frame of -1 means it was never drawn; one out of view is set up once playback runs.
+        return !animation.mAnimationComponentInitialized && animation.mLastUpdateFrame >= 0;
+    });
+    if (!pending) {
+        mAnimationSetupTicks = 0;
+        return false;
     }
-    return pending;
+    --mAnimationSetupTicks;
+    return true;
 }
 
 // The native pause flag leaves item-use ticking alone, which runs the use animation on between replay ticks.
@@ -6868,7 +6871,6 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     case MinecraftPacketIds::RemoveActor: {
         auto const id = *static_cast<RemoveActorPacket const&>(*packet).mEntityId;
         mRecordedEntityIds.erase(id);
-        mAnimationSetupTicks.erase(id);
         std::optional<visuals::EntityRenderKey> removedKey;
         if (auto const renderKey = mEntityRenderKeys.find(id); renderKey != mEntityRenderKeys.end()) {
             removedKey = renderKey->second;
@@ -7124,7 +7126,6 @@ bool ReplaySession::clearRecordedEntities() {
     gReplayHotbars.clear();
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
-    mAnimationSetupTicks.clear();
     if (mRecordedEntityIds.empty()) return true;
     if (!mNetworkHandler) return false;
 
