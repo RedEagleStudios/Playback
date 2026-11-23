@@ -2,6 +2,7 @@
 
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/state/editing/CameraBindingOps.h"
+#include "playback/state/editing/CameraKeys.h"
 
 #include <algorithm>
 #include <iterator>
@@ -98,21 +99,10 @@ void AddKeyframe::execute(model::EditorStateExt& state) {
     }
 
     mBefore = state;
-    // A new track starts at the view's FOV, unless that is already keyed; a captured key only carries the pose, so a
-    // track left at the default 70 zoomed the view in or out on the first key.
-    if (camera->keysByTick.empty() && !model::hasKeys(camera->channels, model::CameraProperty::Fov)) {
-        if (auto const captured = keyframe::captureClientCamera()) camera->fov = captured->fov;
-    }
-    model::CameraKeyframe key;
-    if (mCaptured) key = *mCaptured;
-    else if (!camera->keysByTick.empty()) key = camera->keysByTick.rbegin()->second;
-    if (camera->kind == model::CameraTrackKind::Keyframe) {
-        key.subject.clear();
-    } else if (auto const previous = camera->keysByTick.lower_bound(tick); previous != camera->keysByTick.begin()) {
-        // A person track keeps viewing the same player until a key says otherwise.
-        key.subject = std::prev(previous)->second.subject;
-    }
-    camera->keysByTick.emplace(tick, std::move(key));
+    addCameraKey(*camera, tick, mCaptured, []() -> std::optional<float> {
+        if (auto const view = keyframe::captureClientCamera()) return view->fov;
+        return std::nullopt;
+    });
 }
 
 void        AddKeyframe::undo(model::EditorStateExt& state) { restore(mBefore, state); }

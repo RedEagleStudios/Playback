@@ -2,6 +2,7 @@
 
 #include "BlockStateCondition.h"
 #include "ScreenMedia.h"
+#include "SnapshotPacketOrder.h"
 #include "StandIns.h"
 
 #include "playback/Playback.h"
@@ -7040,12 +7041,7 @@ bool ReplaySession::flushPendingSnapshotGamePackets(
 ) {
     auto pending = std::move(mPendingSnapshotGamePackets);
     mPendingSnapshotGamePackets.clear();
-    // Controller clips go after the actors and ride links they apply to. The recorder writes the player's clips
-    // before the vehicle that carries them, and a clip whose stop expression tests the ride (q.is_riding) would
-    // otherwise end on its first evaluation, leaving the rider in the vanilla riding pose.
-    std::ranges::stable_partition(pending, [](auto const& entry) {
-        return entry.first != MinecraftPacketIds::TriggerAnimation;
-    });
+    orderSnapshotPackets(pending, MinecraftPacketIds::TriggerAnimation);
 
     size_t applied = 0;
     for (auto& [packetId, payload] : pending) {
