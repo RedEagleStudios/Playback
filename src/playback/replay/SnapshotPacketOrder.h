@@ -13,7 +13,9 @@ namespace playback::replay {
 // keeps its recorded order.
 template <class Id, class Payload>
 void orderSnapshotPackets(std::vector<std::pair<Id, Payload>>& packets, Id controllerClip) {
-    std::ranges::stable_partition(packets, [controllerClip](auto const& entry) { return entry.first != controllerClip; });
+    std::ranges::stable_partition(packets, [controllerClip](auto const& entry) {
+        return entry.first != controllerClip;
+    });
 }
 
 } // namespace playback::replay
