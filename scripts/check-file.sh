@@ -3,7 +3,8 @@
 #
 #   scripts/check-file.sh src/playback/replay/ReplaySession.cpp [more files...]
 #
-# A header is checked through the .cpp next to it (Foo.h -> Foo.cpp). The flags come from compile_commands.json, which
+# A header is checked through the .cpp next to it (Foo.h -> Foo.cpp), or, when there is none, through the first source
+# under src/ or tests/ that includes it. The flags come from compile_commands.json, which
 # is generated (xmake project -k compile_commands) when missing, when xmake.lua or the xmake configuration is newer, or
 # when it has no entry for a requested source. The precompiled header from the last build is used when it is up to
 # date; otherwise src/pch.h is included as text, which is slower.
@@ -19,13 +20,69 @@ if [[ $# -eq 0 ]]; then
     exit 2
 fi
 
+# The source closest to a header through its includes (an include names the header by its path under src/, or by its
+# name from the same directory). src/pch.h is force-included into every playback source.
+includer() {
+    python3 - "$1" <<'PY'
+import collections, os, sys
+
+header = sys.argv[1]
+files = sorted(
+    os.path.join(directory, name)
+    for top in ("src", "tests") if os.path.isdir(top)
+    for directory, _, names in os.walk(top)
+    for name in names if name.endswith((".cpp", ".h", ".hpp"))
+)
+if header == "src/pch.h":
+    print(next((f for f in files if f.startswith("src/") and f.endswith(".cpp")), ""))
+    sys.exit()
+texts = {f: open(f, encoding="utf-8", errors="replace").read() for f in files}
+
+
+def includers(target):
+    by_path = f'"{os.path.relpath(target, "src")}"'
+    by_name = f'"{os.path.basename(target)}"'
+    for f, text in texts.items():
+        if f != target and (by_path in text or (os.path.dirname(f) == os.path.dirname(target) and by_name in text)):
+            yield f
+
+
+seen, queue = {header}, collections.deque([header])
+while queue:
+    for f in includers(queue.popleft()):
+        if f.endswith(".cpp"):
+            print(f)
+            sys.exit()
+        if f not in seen:
+            seen.add(f)
+            queue.append(f)
+PY
+}
+
 sources=()
+unchecked=0
 for file in "$@"; do
     [[ $file == /* ]] || file="$caller/$file"
     source=$(realpath -m --relative-to="$root" "$file")
-    case $source in *.h | *.hpp) source="${source%.*}.cpp" ;; esac
+    case $source in
+    *.h | *.hpp)
+        if [[ -f ${source%.*}.cpp ]]; then
+            source="${source%.*}.cpp"
+        else
+            through=$(includer "$source")
+            if [[ -z $through ]]; then
+                echo "check-file: $source: no source includes it, so it cannot be checked on its own" >&2
+                unchecked=1
+                continue
+            fi
+            echo "check-file: $source: checking it through $through" >&2
+            source=$through
+        fi
+        ;;
+    esac
     sources+=("$source")
 done
+[[ ${#sources[@]} -gt 0 ]] || exit 1
 
 # xmake keeps one configuration per host in .xmake/<host>/<arch>/; a checkout shared by Windows and Linux has both.
 case "$(uname -s)" in
@@ -145,4 +202,5 @@ if [[ $status -eq 75 ]]; then
     status=0
     CHECK_FILE_REGENERATED=1 check "${sources[@]}" || status=$?
 fi
+[[ $status -ne 0 ]] || status=$unchecked
 exit $status
