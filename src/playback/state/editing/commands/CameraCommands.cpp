@@ -98,13 +98,14 @@ void AddKeyframe::execute(model::EditorStateExt& state) {
     }
 
     mBefore = state;
+    // A new track starts at the view's FOV, unless that is already keyed; a captured key only carries the pose, so a
+    // track left at the default 70 zoomed the view in or out on the first key.
+    if (camera->keysByTick.empty() && !model::hasKeys(camera->channels, model::CameraProperty::Fov)) {
+        if (auto const captured = keyframe::captureClientCamera()) camera->fov = captured->fov;
+    }
     model::CameraKeyframe key;
     if (mCaptured) key = *mCaptured;
     else if (!camera->keysByTick.empty()) key = camera->keysByTick.rbegin()->second;
-    else if (auto captured = keyframe::captureClientCamera(); captured && camera->keysByTick.empty()) {
-        // A new track starts at the view's FOV, unless that is already keyed.
-        if (!model::hasKeys(camera->channels, model::CameraProperty::Fov)) camera->fov = captured->fov;
-    }
     if (camera->kind == model::CameraTrackKind::Keyframe) {
         key.subject.clear();
     } else if (auto const previous = camera->keysByTick.lower_bound(tick); previous != camera->keysByTick.begin()) {
