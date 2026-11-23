@@ -27,7 +27,13 @@ for file in "$@"; do
     sources+=("$source")
 done
 
-conf=$(ls .xmake/*/*/xmake.conf 2>/dev/null | head -n 1 || true)
+# xmake keeps one configuration per host in .xmake/<host>/<arch>/; a checkout shared by Windows and Linux has both.
+case "$(uname -s)" in
+MINGW* | MSYS* | CYGWIN*) conf=.xmake/windows/x64/xmake.conf ;;
+Darwin) conf=.xmake/macosx/$(uname -m)/xmake.conf ;;
+*) conf=.xmake/linux/$(uname -m)/xmake.conf ;;
+esac
+[[ -f $conf ]] || conf=""
 generate() {
     echo "check-file: generating compile_commands.json" >&2
     xmake project -k compile_commands -y >/dev/null
