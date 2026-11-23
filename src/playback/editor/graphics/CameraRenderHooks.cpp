@@ -652,8 +652,11 @@ LL_TYPE_INSTANCE_HOOK(
 
     // Vanilla interpolates on the client tick, which only matches the replay tick at 1x; drive the pose ourselves.
     auto& replay = replay::ReplaySession::getInstance();
-    // A viewport frame wider than the window renders into a band of the window at the frame's shape.
-    applyPreviewFrameAspect(replay.isActive());
+    // A viewport frame wider than the window renders into a band of the window at the frame's shape. Never while an
+    // export runs: it sizes the render itself, and frames before its first camera sample must not bring the band back.
+    applyPreviewFrameAspect(
+        replay.isActive() && !exporting::isExportActivityActive() && !exporting::isOfflineRenderActivityActive()
+    );
     // Native alpha keeps cycling while paused; pistons must hold the same fraction as the entity poses.
     integration::pushReplayPartial(replay.previewPartialTick());
     // The native hand animation reads the frame alpha, so a paused frame must not feed it the cycling value.
