@@ -2646,6 +2646,9 @@ void ReplaySession::endExportTimeline() {
     mExportTimelinePhase    = ReplayExportTimelinePhase::Inactive;
     mExportCameraViewpoint.reset();
     mExportScreenTime.reset();
+    // An export ticks the level live, so the entities it drew have set up; a setup window opened by its seek (or one
+    // left from before it) must not unfreeze the pause it ends in.
+    mAnimationSetupTicks = 0;
     if (wasActive) {
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
         mObserverServerPositionDirty = false;
