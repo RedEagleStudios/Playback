@@ -91,18 +91,20 @@ Darwin) conf=.xmake/macosx/$(uname -m)/xmake.conf ;;
 *) conf=.xmake/linux/$(uname -m)/xmake.conf ;;
 esac
 [[ -f $conf ]] || conf=""
-# Records which host's configuration produced compile_commands.json, so another host sharing the checkout regenerates it.
-stamp=.xmake/check-file.host
+# Records the host configuration that produced compile_commands.json and the file's checksum, so a database generated
+# by another host, or by xmake directly, is regenerated before use.
+stamp=.xmake/check-file.stamp
+current_stamp() { echo "${conf:-none} $(cksum < compile_commands.json)"; }
 generate() {
     echo "check-file: generating compile_commands.json" >&2
     xmake project -k compile_commands -y >/dev/null
-    mkdir -p .xmake && echo "${conf:-none}" > "$stamp"
+    mkdir -p .xmake && current_stamp > "$stamp"
 }
 if [[ ! -f compile_commands.json || xmake.lua -nt compile_commands.json ]]; then
     generate
 elif [[ -n "$conf" && "$conf" -nt compile_commands.json ]]; then
     generate
-elif [[ "$(cat "$stamp" 2>/dev/null)" != "${conf:-none}" ]]; then
+elif [[ "$(cat "$stamp" 2>/dev/null)" != "$(current_stamp)" ]]; then
     generate
 fi
 
