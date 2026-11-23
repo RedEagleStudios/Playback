@@ -1231,6 +1231,8 @@ bool ReplaySession::setPaused(bool paused) {
     mObserverPreviewInRange = false;
     if (!paused) {
         mPausedPreviewPose.reset();
+        // The setup window belongs to the seek's paused landing; a later pause keeps the level frozen.
+        mAnimationSetupTicks = 0;
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
         mObserverServerPositionDirty = false;
         mLastObserverServerSyncChunk.reset();
@@ -2699,7 +2701,8 @@ void ReplaySession::finishSeek() {
     // Export seeks never tick the level during catch-up, so they always drop the particles it piled up.
     if (mExportSeekRequested) mSeekParticlesStale = true;
     mSeekTargetTick         = -1;
-    mAnimationSetupTicks    = MaxAnimationSetupTicks;
+    // Only a paused landing needs the setup window; a playing one ticks the level anyway.
+    mAnimationSetupTicks    = mIsPaused ? MaxAnimationSetupTicks : 0;
     // The clips the catch-up started play from 0 on the client; resumeSeekAnimationClips sets their clocks.
     mPendingAnimationClips.clear();
     for (auto& [_, clip] : mSeekAnimationClips) mPendingAnimationClips.push_back(std::move(clip));
