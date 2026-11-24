@@ -505,7 +505,7 @@ SetCameraProperties::SetCameraProperties(std::string cameraId, model::CameraProp
 void SetCameraProperties::execute(model::EditorStateExt& state) {
     mBefore.reset();
     auto* camera = findCamera(state, mCameraId);
-    if (!camera || camera->locked || camera->kind != model::CameraTrackKind::Keyframe) return;
+    if (!camera || camera->locked) return;
     auto edited = *camera;
     model::setCameraProperties(edited, mProperties);
     if (model::cameraProperties(edited) == model::cameraProperties(*camera)) return;

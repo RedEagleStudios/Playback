@@ -63,10 +63,6 @@ struct WorldSettings {
     // darkens the sky. Lightning bolts are recorded entities and still strike as recorded.
     bool         overrideWeather{};
     WeatherStyle weather{WeatherStyle::Clear};
-    // Off: every view keeps its own field of view (camera keys, the followed player's, the free camera's). On: all of
-    // them take fov, in degrees, in preview and export alike. The first-person hand keeps the game's own.
-    bool  overrideFov{};
-    float fov{70.0f};
     // Off: the viewer's own graphics mode.
     bool          overrideGraphics{};
     GraphicsStyle graphics{GraphicsStyle::Fancy};
@@ -93,9 +89,6 @@ struct WorldSettings {
     static constexpr float MaxFogDistance = 4.0f;
     static constexpr float MinFogRange    = 0.01f;
 
-    static constexpr float MinFov = 10.0f;
-    static constexpr float MaxFov = 150.0f;
-
     // The settings brought into range, as the UI and project files may hold anything.
     [[nodiscard]] WorldSettings sanitized() const {
         auto const unit = [](float value, float low, float high, float fallback) {
@@ -109,7 +102,6 @@ struct WorldSettings {
         out.exposure    = unit(exposure, -MaxExposure, MaxExposure, 0.0f);
         out.temperature = unit(temperature, -1.0f, 1.0f, 0.0f);
         out.tint        = unit(tint, -1.0f, 1.0f, 0.0f);
-        out.fov         = unit(fov, MinFov, MaxFov, 70.0f);
         for (auto& channel : out.fogColor) channel = unit(channel, 0.0f, 1.0f, 0.0f);
         if (graphics != GraphicsStyle::Simple && graphics != GraphicsStyle::Fancy
             && graphics != GraphicsStyle::VibrantVisuals)
@@ -129,7 +121,6 @@ struct WorldSettings {
     if (name == "fogColorR") return &world.fogColor[0];
     if (name == "fogColorG") return &world.fogColor[1];
     if (name == "fogColorB") return &world.fogColor[2];
-    if (name == "fov") return &world.fov;
     if (name == "exposure") return &world.exposure;
     if (name == "temperature") return &world.temperature;
     if (name == "tint") return &world.tint;

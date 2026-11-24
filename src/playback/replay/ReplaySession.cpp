@@ -1370,6 +1370,8 @@ void ReplaySession::updatePreviewShot() {
                 subject = shot.subject;
                 third   = shot.kind() == CameraTrackKind::ThirdPerson;
                 if (third) follow = {shot.camera->follow, shot.camera->keysByTick.begin()->first, shot.camera->id};
+                follow.timeline = timeline;
+                follow.camera   = shot.camera;
             }
         }
     }
@@ -2180,6 +2182,15 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
         double const tick = time ? static_cast<double>(time->value()) : static_cast<double>(getCurrentTick());
         auto const   view = followView(settings, *state, (tick - startTick) / ReplayTicksPerSecond);
         state             = mFollowSmoother.apply(view, tick / ReplayTicksPerSecond, settings.smoothing);
+    }
+    // A person track with its own FOV shows it in place of the followed player's.
+    {
+        std::scoped_lock lock(mShotFollowMutex);
+        if (mShotFollow.camera) {
+            auto const   time = getCameraRenderSampleTime();
+            double const tick = time ? static_cast<double>(time->value()) : static_cast<double>(getCurrentTick());
+            if (auto const fov = state::editing::model::cameraFovAt(*mShotFollow.camera, tick)) state->fov = *fov;
+        }
     }
     mFollowHeldPose = state;
     return state;
@@ -6433,17 +6444,6 @@ void ReplaySession::syncScreenPreviewAfterSeek() {
     else popReplayScreen();
 }
 
-bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
-    if (packetId == MinecraftPacketIds::ContainerOpen || packetId == MinecraftPacketIds::ContainerClose
-        || packetId == MinecraftPacketIds::ShowModalForm || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
-        return trackScreenPacket(packetId, payload);
-    }
-    // An older recording may still carry packets the recorder now ignores.
-    if (describePacketLifecycle(packetId).lifecycle == PacketLifecycle::Ignore) return true;
-    // The client registry is built once; the recorded table already went in at login in place of the local one.
-    if (packetId == MinecraftPacketIds::ItemRegistryPacket
-        && mRecordedItemRegistryApplied.load(std::memory_order_acquire)) {
-        return true;
 namespace {
 
 // Chat lines that commands produced: the recording player's command output, and server messages naming a command's
@@ -6463,6 +6463,17 @@ bool isCommandFeedbackPacket(MinecraftPacketIds packetId, Packet const& packet) 
 
 } // namespace
 
+bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
+    if (packetId == MinecraftPacketIds::ContainerOpen || packetId == MinecraftPacketIds::ContainerClose
+        || packetId == MinecraftPacketIds::ShowModalForm || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
+        return trackScreenPacket(packetId, payload);
+    }
+    // An older recording may still carry packets the recorder now ignores.
+    if (describePacketLifecycle(packetId).lifecycle == PacketLifecycle::Ignore) return true;
+    // The client registry is built once; the recorded table already went in at login in place of the local one.
+    if (packetId == MinecraftPacketIds::ItemRegistryPacket
+        && mRecordedItemRegistryApplied.load(std::memory_order_acquire)) {
+        return true;
     }
 
     auto packet = MinecraftPackets::createPacket(packetId);
@@ -6484,6 +6495,11 @@ bool isCommandFeedbackPacket(MinecraftPacketIds packetId, Packet const& packet) 
         getLogger().error("Unable to read or deserialize replay game packet {}", static_cast<int>(packetId));
         return false;
     }
+    // Hidden command feedback never reaches the chat, in preview and export alike.
+    if (visuals::isHudElementHiddenNow(visuals::HudElement::CommandFeedback)
+        && isCommandFeedbackPacket(packetId, *packet)) {
+        return true;
+    }
 
     if (packetId == MinecraftPacketIds::SetTime) {
         mReplayTime = static_cast<SetTimePacket const&>(*packet).mTime;
@@ -6495,11 +6511,6 @@ bool isCommandFeedbackPacket(MinecraftPacketIds packetId, Packet const& packet) 
         for (auto& id : *static_cast<AnimateEntityPacket&>(*packet).mRuntimeIds) {
             if (id.rawID == liveRuntimeId) id = ActorRuntimeID{record::RecordedPlayerRuntimeIdValue};
         }
-    // Hidden command feedback never reaches the chat, in preview and export alike.
-    if (visuals::isHudElementHiddenNow(visuals::HudElement::CommandFeedback)
-        && isCommandFeedbackPacket(packetId, *packet)) {
-        return true;
-    }
     }
     if (packetId == MinecraftPacketIds::TriggerAnimation && !mApplyingDeferredControllers
         && deferControllerPacket(static_cast<AnimateEntityPacket const&>(*packet), payload)) {

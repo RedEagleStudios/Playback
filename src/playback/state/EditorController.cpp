@@ -577,7 +577,6 @@ void EditorController::publishState(bool hudVisible) {
         mWorldPreview.reset();
         mOverlayPreview.reset();
         editor::graphics::setFogOverride(std::nullopt);
-        editor::graphics::setFovOverride(std::nullopt);
         editor::graphics::setColorGrading(std::nullopt);
         editor::graphics::setBlurLayers({});
     }
@@ -599,7 +598,6 @@ void EditorController::publishState(bool hudVisible) {
             world.overrideFog ? std::optional<editor::graphics::FogOverride>{{world.fogStart, world.fogEnd}}
                               : std::nullopt
         );
-        editor::graphics::setFovOverride(world.overrideFov ? std::optional{world.fov} : std::nullopt);
         session.setWeatherOverride(world.overrideWeather ? std::optional{world.weather} : std::nullopt);
         editor::graphics::setColorGrading(
             world.overrideColor

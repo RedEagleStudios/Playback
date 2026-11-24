@@ -208,6 +208,8 @@ json toJson(CameraEntity const& camera) {
         {"bindingDamping",    camera.bindingDamping        },
         {"keys",              std::move(keys)              }
     };
+    result["fov"]      = camera.fov;
+    result["channels"] = toJson(camera.channels);
     if (camera.kind == CameraTrackKind::Keyframe) {
         result["shake"] = {
             {"positionAmount", camera.shake.positionAmount},
@@ -215,10 +217,10 @@ json toJson(CameraEntity const& camera) {
             {"rollAmount",     camera.shake.rollAmount    },
             {"seed",           camera.shake.seed          }
         };
-        result["fov"]            = camera.fov;
         result["shakeStrength"]  = camera.shakeStrength;
         result["shakeFrequency"] = camera.shakeFrequency;
-        result["channels"]       = toJson(camera.channels);
+    } else {
+        result["overrideFov"] = camera.overrideFov;
     }
     if (camera.limiter) {
         result["limiter"] = {
@@ -265,6 +267,7 @@ CameraEntity cameraFrom(json const& node) {
             migrateKeyProperty(camera, *keys, "shakeFrequency", CameraProperty::ShakeFrequency, camera.shakeFrequency);
         }
     }
+    camera.overrideFov    = camera.kind != CameraTrackKind::Keyframe && boolOr(node, "overrideFov", false);
     camera.fov            = finiteOr(node, "fov", camera.fov);
     camera.shakeStrength  = sanitizedShakeStrength(finiteOr(node, "shakeStrength", camera.shakeStrength));
     camera.shakeFrequency = sanitizedShakeFrequency(finiteOr(node, "shakeFrequency", camera.shakeFrequency));
@@ -784,8 +787,6 @@ std::string serializeProject(model::EditorStateExt const& project) {
              {"fogColor", project.world.fogColor},
              {"overrideWeather", project.world.overrideWeather},
              {"weather", static_cast<int>(project.world.weather)},
-             {"overrideFov", project.world.overrideFov},
-             {"fov", project.world.fov},
              {"overrideGraphics", project.world.overrideGraphics},
              {"graphics", static_cast<int>(project.world.graphics)},
              {"shaderOptions", project.world.shaderOptions},
@@ -901,8 +902,6 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         }
         loaded.world.overrideWeather  = boolOr(*world, "overrideWeather", defaults.overrideWeather);
         loaded.world.weather          = enumOr(*world, "weather", defaults.weather, 2);
-        loaded.world.overrideFov      = boolOr(*world, "overrideFov", defaults.overrideFov);
-        loaded.world.fov              = finiteOr(*world, "fov", defaults.fov);
         loaded.world.overrideGraphics    = boolOr(*world, "overrideGraphics", defaults.overrideGraphics);
         loaded.world.graphics            = enumOr(*world, "graphics", defaults.graphics, 2);
         if (auto const* packs = objectAt(*world, "shaderOptions")) {
@@ -927,6 +926,18 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.world.temperature   = finiteOr(*world, "temperature", defaults.temperature);
         loaded.world.tint          = finiteOr(*world, "tint", defaults.tint);
         loaded.world.channels      = channelsFrom(*world, "channels");
+        // Projects saved before the FOV moved to the camera tracks held one FOV for every view in the World section;
+        // their tracks take it on, keys included, so they look as they did.
+        auto fovKeys = loaded.world.channels.extract("fov");
+        if (boolOr(*world, "overrideFov", false)) {
+            float const fov = std::clamp(finiteOr(*world, "fov", 70.0f), 10.0f, 150.0f);
+            for (auto& camera : loaded.cameras) {
+                camera.overrideFov = camera.kind != CameraTrackKind::Keyframe;
+                camera.fov         = fov;
+                if (fovKeys) camera.channels.insert_or_assign(CameraProperty::Fov, fovKeys.mapped());
+                else camera.channels.erase(CameraProperty::Fov);
+            }
+        }
         loaded.world              = loaded.world.sanitized();
     }
     loaded.recordedCameraTracksAdded = boolOr(document, "recordedCameraTracksAdded", false);

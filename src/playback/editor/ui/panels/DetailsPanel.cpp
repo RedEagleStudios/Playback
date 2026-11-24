@@ -14,6 +14,7 @@
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/state/editing/models/CameraLens.h"
 #include "playback/utils/PathUtils.h"
 
 #include "ll/api/i18n/I18n.h"
@@ -616,7 +617,7 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
             property::endSection();
         }
         if (camera->kind == state::editing::model::CameraTrackKind::ThirdPerson) drawFollowSection(ctx, *camera);
-        if (camera->kind == state::editing::model::CameraTrackKind::Keyframe) drawShakeSection(ctx, *camera);
+        drawLensSection(ctx, *camera);
         return true;
     }
     return false;
@@ -1099,10 +1100,10 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
         };
         std::array const toggles{
             Toggle{visuals::HudElement::Chat,       ICON_CHAT,       "playback.refactorEditor.inspector.hudChat"_tr()      },
-            Toggle{visuals::HudElement::BossBar,    ICON_BOSS_BAR,   "playback.refactorEditor.inspector.hudBossBar"_tr()   },
             Toggle{visuals::HudElement::CommandFeedback,
                    ICON_COMMAND_FEEDBACK,
                    "playback.refactorEditor.inspector.hudCommandFeedback"_tr()},
+            Toggle{visuals::HudElement::BossBar,    ICON_BOSS_BAR,   "playback.refactorEditor.inspector.hudBossBar"_tr()   },
             Toggle{visuals::HudElement::Title,      ICON_HEADING,    "playback.refactorEditor.inspector.hudTitle"_tr()     },
             Toggle{visuals::HudElement::Scoreboard, ICON_SCOREBOARD, "playback.refactorEditor.inspector.hudScoreboard"_tr()},
             Toggle{visuals::HudElement::ActionBar,  ICON_ACTION_BAR, "playback.refactorEditor.inspector.hudActionBar"_tr() },
@@ -1113,9 +1114,9 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
             ImGui::PushID(static_cast<int>(toggle.element));
             std::string const tooltip = toggle.element == visuals::HudElement::Hotbar
                                           ? "playback.refactorEditor.inspector.hudHotbarHint"_tr()
-                                          : std::string{};
                                       : toggle.element == visuals::HudElement::CommandFeedback
                                           ? "playback.refactorEditor.inspector.hudCommandFeedbackHint"_tr()
+                                          : std::string{};
             if (widgets::toggleRow(
                     "##set-hud",
                     toggle.icon,
@@ -1522,29 +1523,6 @@ void DetailsPanel::drawWorldSection(PanelContext const& ctx) {
 
     property::separator();
     toggle(
-        "##set-override-fov",
-        ICON_FOV,
-        "playback.refactorEditor.inspector.worldOverrideFov"_tr(),
-        &WorldSettings::overrideFov,
-        "playback.refactorEditor.inspector.worldFovHint"_tr()
-    );
-    ImGui::BeginDisabled(!world.overrideFov);
-    keyed(keyframes::propertyRow(
-        "fov",
-        nullptr,
-        "playback.refactorEditor.details.fov"_tr(),
-        world.channels,
-        "fov",
-        world.fov,
-        tick,
-        WorldSettings::MinFov,
-        WorldSettings::MaxFov,
-        "%.0f°"
-    ));
-    ImGui::EndDisabled();
-
-    property::separator();
-    toggle(
         "##set-override-graphics",
         ICON_GRAPHICS,
         "playback.refactorEditor.inspector.worldOverrideGraphics"_tr(),
@@ -1943,10 +1921,14 @@ void DetailsPanel::drawFollowSection(PanelContext const& ctx, state::editing::mo
     property::endSection();
 }
 
-void DetailsPanel::drawShakeSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera) {
+void DetailsPanel::drawLensSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera) {
     using editing::model::ShakeSettings;
     namespace Property = editing::model::CameraProperty;
-    if (!property::beginSection((ICON_GRAPH "  " + "playback.refactorEditor.details.lensAndShake"_tr()).c_str())) return;
+    // A person track shows the followed player's own FOV unless it sets one; only keyframe tracks shake.
+    bool const        person = camera.kind != editing::model::CameraTrackKind::Keyframe;
+    std::string const title  = person ? "playback.refactorEditor.details.lens"_tr()
+                                      : "playback.refactorEditor.details.lensAndShake"_tr();
+    if (!property::beginSection((ICON_GRAPH "  " + title).c_str())) return;
 
     bool const draft      = mCameraDraft && mCameraDraft->first == camera.id;
     auto       properties = draft ? mCameraDraft->second : editing::model::cameraProperties(camera);
@@ -1962,8 +1944,67 @@ void DetailsPanel::drawShakeSection(PanelContext const& ctx, state::editing::mod
         if (result.changed && !ImGui::IsAnyItemActive()) clicked = true;
     };
 
+    auto const finish = [&] {
+        auto const submit = [&](EditorActionType type, std::optional<editing::model::CameraProperties> edited) {
+            EditorAction action{type};
+            action.id               = camera.id;
+            action.cameraProperties = std::move(edited);
+            ctx.submitAction(std::move(action));
+        };
+        if (!(properties == before)) {
+            mCameraDraft = std::pair{camera.id, properties};
+            submit(EditorActionType::PreviewCameraProperties, properties);
+        }
+        // A click, or a field let go, becomes one undo step.
+        if (mCameraDraft && mCameraDraft->first == camera.id && (clicked || !ImGui::IsAnyItemActive())) {
+            submit(EditorActionType::SetCameraProperties, mCameraDraft->second);
+            mCameraDraft.reset();
+        }
+        property::endSection();
+    };
+
     ImGui::BeginDisabled(camera.locked);
+    if (person
+        && widgets::toggleRow(
+            "##camera-override-fov",
+            ICON_FOV,
+            "playback.refactorEditor.details.overrideFov"_tr().c_str(),
+            &properties.overrideFov,
+            "playback.refactorEditor.details.overrideFovHint"_tr().c_str()
+        )) {
+        clicked = true;
+    }
+    ImGui::BeginDisabled(person && !properties.overrideFov);
     row("fov", ICON_FOV, "playback.refactorEditor.details.fov"_tr(), Property::Fov, properties.fov, 1.0f, 179.0f, "%.1f°");
+
+    // A lens sets the FOV as typing it would: keyed at the playhead, and the value without keys. Its FOV depends on
+    // the frame's shape, so the same lens frames a 9:16 shot as a camera turned upright would.
+    float const aspect  = ctx.commands.videoAspectRatio();
+    float const shown   = editing::model::channelValue(properties.channels, Property::Fov, tick, properties.fov);
+    auto const  lens    = editing::model::matchingLens(shown, aspect);
+    std::string const preview = lens ? "playback.refactorEditor.details.lensFocal"_tr(*lens)
+                                     : "playback.refactorEditor.details.lensCustom"_tr();
+    widgets::fieldLabel(ICON_CAMERA, "playback.refactorEditor.details.lensPreset"_tr().c_str());
+    ImGui::SetNextItemWidth(-1.0f);
+    if (widgets::beginCombo("##camera-lens", preview.c_str())) {
+        for (int const focalLength : editing::model::LensFocalLengths) {
+            std::string const label = "playback.refactorEditor.details.lensFocal"_tr(focalLength);
+            if (ImGui::Selectable(label.c_str(), lens == focalLength)) {
+                float const fov = editing::model::lensFov(static_cast<float>(focalLength), aspect);
+                properties.fov  = fov;
+                properties.channels[Property::Fov][tick].value = fov;
+                clicked         = true;
+            }
+        }
+        widgets::endCombo();
+    }
+    widgets::itemTooltip("playback.refactorEditor.details.lensHint"_tr().c_str());
+    ImGui::EndDisabled();
+    if (person) {
+        ImGui::EndDisabled();
+        finish();
+        return;
+    }
 
     // The shake keys as one: a shake key holds all five values, so the header carries the only diamond and an edit to
     // any of them keys the whole shake at the playhead.
@@ -2061,23 +2102,7 @@ void DetailsPanel::drawShakeSection(PanelContext const& ctx, state::editing::mod
         clicked               = true;
     }
     ImGui::EndDisabled();
-
-    auto const submit = [&](EditorActionType type, std::optional<editing::model::CameraProperties> edited) {
-        EditorAction action{type};
-        action.id               = camera.id;
-        action.cameraProperties = std::move(edited);
-        ctx.submitAction(std::move(action));
-    };
-    if (!(properties == before)) {
-        mCameraDraft = std::pair{camera.id, properties};
-        submit(EditorActionType::PreviewCameraProperties, properties);
-    }
-    // A click, or a field let go, becomes one undo step.
-    if (mCameraDraft && mCameraDraft->first == camera.id && (clicked || !ImGui::IsAnyItemActive())) {
-        submit(EditorActionType::SetCameraProperties, mCameraDraft->second);
-        mCameraDraft.reset();
-    }
-    property::endSection();
+    finish();
 }
 
 void DetailsPanel::drawOptiPistonSection() {

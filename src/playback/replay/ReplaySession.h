@@ -54,6 +54,13 @@ struct PoseClipRuntime;
 struct ServerBlockProperty;
 enum class MinecraftPacketIds : int;
 
+namespace playback::keyframe {
+class CameraTimelineEvaluator;
+}
+namespace playback::state::editing::model {
+struct CameraEntity;
+}
+
 namespace playback::replay {
 using playback::io::AsyncReplaySaver;
 using playback::io::PlaybackBuffer;
@@ -270,12 +277,15 @@ private:
     // subject in its place.
     std::atomic<PreviewShotMode>                mPreviewShotMode{PreviewShotMode::None};
     std::atomic<bool>                           mShotThirdPerson{false};
-    // The third-person framing the preview shows: the person track's follow settings, its first key and id, or the
-    // defaults (vanilla F5) for the user's own follow, which has no id. Written on the client tick, read by renders.
+    // The person track the preview shows: for a third-person track its follow settings, first key and id, or the
+    // defaults (vanilla F5) for the user's own follow, which has no id; for any person track the track itself, held
+    // alive with its timeline, for its own FOV. Written on the client tick, read by renders.
     struct ShotFollow {
-        state::editing::model::FollowSettings settings;
-        int                                   startTick{};
-        std::string                           cameraId;
+        state::editing::model::FollowSettings                    settings;
+        int                                                      startTick{};
+        std::string                                              cameraId;
+        std::shared_ptr<keyframe::CameraTimelineEvaluator const> timeline;
+        state::editing::model::CameraEntity const*               camera{};
     };
     mutable std::mutex mShotFollowMutex;
     ShotFollow         mShotFollow;

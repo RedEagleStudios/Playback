@@ -27,8 +27,4 @@ struct RenderCameraProjection {
 [[nodiscard]] std::optional<RenderCameraProjection>      currentRenderCameraProjection();
 void                                                     useSubmittedCameraProjection(bgfx::Frame const* frame);
 
-// The project's FOV in degrees for every view the replay renders, preview and export; nullopt lets each view keep its
-// own. The first-person hand keeps the game's. Any thread.
-void setFovOverride(std::optional<float> degrees);
-
 } // namespace playback::editor::graphics

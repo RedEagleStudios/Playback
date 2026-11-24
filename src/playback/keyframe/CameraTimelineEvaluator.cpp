@@ -256,6 +256,7 @@ CameraTimelineEvaluator::sampleTrack(CameraEntity const& camera, visuals::Replay
     if (!mSubjectSampler) return std::nullopt;
     auto state = mSubjectSampler(time, subjectAt(camera, time.floorTick()), camera);
     if (!state) return std::nullopt;
+    if (auto const fov = state::editing::model::cameraFovAt(camera, static_cast<double>(time.value()))) state->fov = *fov;
     return CameraTimelineEvaluation{*state, camera.id, camera.kind};
 }
 

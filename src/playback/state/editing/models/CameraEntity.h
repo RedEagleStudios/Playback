@@ -36,9 +36,12 @@ struct CameraEntity {
     bool                          locked{};
     // Third-person tracks only: how the camera frames the subject.
     FollowSettings follow;
-    // Keyframe tracks only, besides the Transform keys: the view's FOV and the shake, each a static value here or keyed
-    // on its own in `channels` (see CameraProperty). The seed is never keyed.
-    float         fov{70.0f};
+    // The view's FOV, a static value here or keyed in `channels` (see CameraProperty). A keyframe track always shows
+    // it; a person track only with overrideFov, and otherwise the followed player's own (spyglass zoom included).
+    bool  overrideFov{};
+    float fov{70.0f};
+    // Keyframe tracks only: the shake, each value static here or keyed on its own in `channels`. The seed is never
+    // keyed.
     float         shakeStrength{};
     float         shakeFrequency{ShakeSettings::DefaultFrequency};
     ShakeSettings shake;
@@ -88,8 +91,9 @@ inline void setCameraStaticValue(CameraEntity& camera, std::string const& name, 
     return channelValue(camera.channels, name, tick, cameraStaticValue(camera, name));
 }
 
-// A keyframe track's properties besides its Transform keys, edited and undone as one.
+// A camera track's properties besides its keys, edited and undone as one. Person tracks only use the FOV.
 struct CameraProperties {
+    bool          overrideFov{};
     float         fov{70.0f};
     float         shakeStrength{};
     float         shakeFrequency{ShakeSettings::DefaultFrequency};
@@ -100,16 +104,23 @@ struct CameraProperties {
 };
 
 [[nodiscard]] inline CameraProperties cameraProperties(CameraEntity const& camera) {
-    return {camera.fov, camera.shakeStrength, camera.shakeFrequency, camera.shake, camera.channels};
+    return {camera.overrideFov, camera.fov, camera.shakeStrength, camera.shakeFrequency, camera.shake, camera.channels};
 }
 
 inline void setCameraProperties(CameraEntity& camera, CameraProperties properties) {
+    camera.overrideFov    = properties.overrideFov;
     camera.fov            = std::isfinite(properties.fov) ? std::clamp(properties.fov, 1.0f, 179.0f) : camera.fov;
     camera.shakeStrength  = sanitizedShakeStrength(properties.shakeStrength);
     camera.shakeFrequency = sanitizedShakeFrequency(properties.shakeFrequency);
     camera.shake          = properties.shake.sanitized();
     pruneChannels(properties.channels);
     camera.channels = std::move(properties.channels);
+}
+
+// The FOV the track gives the view at `tick`; none where a person track leaves the followed player's own.
+[[nodiscard]] inline std::optional<float> cameraFovAt(CameraEntity const& camera, double tick) {
+    if (camera.kind != CameraTrackKind::Keyframe && !camera.overrideFov) return std::nullopt;
+    return cameraPropertyAt(camera, CameraProperty::Fov, tick);
 }
 
 [[nodiscard]] inline bool hasCameraSource(CameraEntity const& camera) noexcept { return !camera.keysByTick.empty(); }

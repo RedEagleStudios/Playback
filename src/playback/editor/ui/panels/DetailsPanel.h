@@ -49,8 +49,8 @@ private:
     );
     // A third-person track's framing (FollowSettings).
     void drawFollowSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera);
-    // A keyframe track's shake amounts and seed (ShakeSettings).
-    void drawShakeSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera);
+    // A camera track's FOV and lens, and a keyframe track's shake amounts and seed (ShakeSettings).
+    void drawLensSection(PanelContext const& ctx, state::editing::model::CameraEntity const& camera);
 
     // Each returns true when it owns the current selection and has drawn it.
     bool drawWorldActor(PanelContext const& ctx);

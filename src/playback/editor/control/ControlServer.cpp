@@ -56,8 +56,6 @@ json toJson(model::WorldSettings const& world) {
         {"fogColor",            world.fogColor                       },
         {"overrideWeather",     world.overrideWeather                },
         {"weather",             magic_enum::enum_name(world.weather) },
-        {"overrideFov",         world.overrideFov                    },
-        {"fov",                 world.fov                            },
         {"overrideGraphics",    world.overrideGraphics               },
         {"graphics",            magic_enum::enum_name(world.graphics)},
         {"shaderOptions",       world.shaderOptions                  },
@@ -198,12 +196,14 @@ json stateJson(EditorState const& state) {
                 {"keys",    std::move(keys)                   },
             };
             if (camera.kind == model::CameraTrackKind::ThirdPerson) entry["follow"] = toJson(camera.follow);
+            entry["fov"]      = camera.fov;
+            entry["channels"] = toJson(camera.channels);
             if (camera.kind == model::CameraTrackKind::Keyframe) {
                 entry["shake"]          = toJson(camera.shake);
-                entry["fov"]            = camera.fov;
                 entry["shakeStrength"]  = camera.shakeStrength;
                 entry["shakeFrequency"] = camera.shakeFrequency;
-                entry["channels"]       = toJson(camera.channels);
+            } else {
+                entry["overrideFov"] = camera.overrideFov;
             }
             cameras.push_back(std::move(entry));
         }
@@ -294,8 +294,6 @@ model::WorldSettings worldFrom(json const& node, model::WorldSettings world) {
             world.weather = *parsed;
         }
     }
-    world.overrideFov      = node.value("overrideFov", world.overrideFov);
-    world.fov              = node.value("fov", world.fov);
     world.overrideGraphics = node.value("overrideGraphics", world.overrideGraphics);
     if (auto const graphics = node.find("graphics"); graphics != node.end() && graphics->is_string()) {
         if (auto const parsed = magic_enum::enum_cast<model::GraphicsStyle>(graphics->get<std::string>())) {
@@ -470,6 +468,7 @@ std::optional<EditorAction> actionFrom(json const& body, EditorState const& stat
             auto const camera = std::ranges::find(state.project->cameras, action.id, &model::CameraEntity::id);
             if (camera != state.project->cameras.end()) current = model::cameraProperties(*camera);
         }
+        current.overrideFov    = properties->value("overrideFov", current.overrideFov);
         current.fov            = properties->value("fov", current.fov);
         current.shakeStrength  = properties->value("shakeStrength", current.shakeStrength);
         current.shakeFrequency = properties->value("shakeFrequency", current.shakeFrequency);
