@@ -31,24 +31,25 @@ inline constexpr uint64_t MaxFrameBytes     = 512ull * 1024 * 1024;
         && frame.colorSpace == visuals::FrameColorSpace::SdrSrgb;
 }
 
-inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint8_t>& rgba) {
+// The captured picture is the game's swap-chain image, which it presents opaque: its alpha channel is whatever the
+// last pass happened to write (Vibrant Visuals leaves 0 everywhere) and is not part of the picture. Written frames are
+// therefore made fully opaque, or a PNG of a correct picture shows as empty.
+inline void copyPackedOpaqueRgba(visuals::CapturedFrame const& frame, std::vector<uint8_t>& rgba) {
     size_t const targetRowPitch = static_cast<size_t>(frame.width) * 4;
     rgba.resize(targetRowPitch * frame.height);
     auto const* sourcePixels = reinterpret_cast<uint8_t const*>(frame.pixels.data());
+    bool const  swapRedBlue  = frame.pixelFormat == visuals::FramePixelFormat::Bgra8;
     for (uint32_t y = 0; y < frame.height; ++y) {
-        auto const* sourceRow = sourcePixels + static_cast<size_t>(y) * frame.rowPitch;
-        auto*       targetRow = rgba.data() + static_cast<size_t>(y) * targetRowPitch;
-        if (frame.pixelFormat == visuals::FramePixelFormat::Rgba8) {
-            std::memcpy(targetRow, sourceRow, targetRowPitch);
-            continue;
-        }
-        for (uint32_t x = 0; x < frame.width; ++x) {
-            auto const* source = sourceRow + static_cast<size_t>(x) * 4;
-            auto*       target = targetRow + static_cast<size_t>(x) * 4;
-            target[0]          = source[2];
-            target[1]          = source[1];
-            target[2]          = source[0];
-            target[3]          = source[3];
+        auto const* source = sourcePixels + static_cast<size_t>(y) * frame.rowPitch;
+        auto*       target = rgba.data() + static_cast<size_t>(y) * targetRowPitch;
+        if (!swapRedBlue) std::memcpy(target, source, targetRowPitch);
+        for (uint32_t x = 0; x < frame.width; ++x, source += 4, target += 4) {
+            if (swapRedBlue) {
+                target[0] = source[2];
+                target[1] = source[1];
+                target[2] = source[0];
+            }
+            target[3] = 0xFF;
         }
     }
 }
