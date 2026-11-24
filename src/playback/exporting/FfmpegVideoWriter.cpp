@@ -507,7 +507,7 @@ struct FfmpegVideoWriter::Impl {
                 frameBytes = reinterpret_cast<uint8_t const*>(item.pixels.data());
                 frameSize  = packedRowPitch * item.height;
             } else {
-                detail::copyPackedRgba(item, rgba);
+                detail::copyPackedOpaqueRgba(item, rgba);
                 frameBytes = rgba.data();
                 frameSize  = rgba.size();
             }

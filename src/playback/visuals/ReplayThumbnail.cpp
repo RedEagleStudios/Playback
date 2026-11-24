@@ -280,10 +280,11 @@ bool writeReplayThumbnailPng(
                 target[0] = source[2];
                 target[1] = source[1];
                 target[2] = source[0];
-                target[3] = source[3];
             } else {
-                std::memcpy(target, source, 4);
+                std::memcpy(target, source, 3);
             }
+            // The swap chain's alpha is not part of the picture (see copyPackedOpaqueRgba).
+            target[3] = 0xFF;
         }
     }
     return writeRgbaPng(output, targetWidth, targetHeight, rgba.data(), targetWidth * 4);
@@ -345,6 +346,8 @@ bool decodeReplayThumbnailPng(std::string_view png, ReplayThumbnailPixels& outpu
         )) {
         return false;
     }
+    // Thumbnails saved before captures were made opaque can carry the swap chain's alpha of 0 (Vibrant Visuals).
+    for (size_t alpha = 3; alpha < decoded.rgba.size(); alpha += 4) decoded.rgba[alpha] = 0xFF;
     output = std::move(decoded);
     return true;
 }

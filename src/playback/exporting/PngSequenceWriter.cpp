@@ -138,7 +138,7 @@ struct PngSequenceWriter::Impl {
                 }
                 break;
             }
-            detail::copyPackedRgba(item.frame, rgba);
+            detail::copyPackedOpaqueRgba(item.frame, rgba);
             auto const output  = stillFile.empty() ? framePath(directory, item.index) : stillFile;
             auto       partial = output;
             partial += ".part";
