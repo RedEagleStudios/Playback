@@ -1,6 +1,7 @@
 #include "ReplaySession.h"
 
 #include "BlockStateCondition.h"
+#include "CommandFeedback.h"
 #include "ScreenMedia.h"
 #include "SnapshotPacketOrder.h"
 #include "StandIns.h"
@@ -20,6 +21,7 @@
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
 #include "playback/visuals/ReplayHudHooks.h"
+#include "playback/visuals/ReplayHudVisibility.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/i18n/I18n.h"
@@ -109,6 +111,7 @@
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
+#include "mc/network/packet/TextPacket.h"
 #include "mc/network/packet/UpdateAttributesPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
@@ -6441,6 +6444,25 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     if (packetId == MinecraftPacketIds::ItemRegistryPacket
         && mRecordedItemRegistryApplied.load(std::memory_order_acquire)) {
         return true;
+namespace {
+
+// Chat lines that commands produced: the recording player's command output, and server messages naming a command's
+// output. Players' own chat and whispers are never feedback.
+bool isCommandFeedbackPacket(MinecraftPacketIds packetId, Packet const& packet) {
+    if (packetId == MinecraftPacketIds::CommandOutput) return true;
+    if (packetId != MinecraftPacketIds::Text) return false;
+    auto const& body = *static_cast<TextPacket const&>(packet).mBody;
+    if (auto const* message = std::get_if<TextPacketPayload::MessageOnly>(&body)) {
+        return isCommandFeedbackMessage(*message->mMessage);
+    }
+    if (auto const* message = std::get_if<TextPacketPayload::MessageAndParams>(&body)) {
+        return isCommandFeedbackMessage(*message->mMessage);
+    }
+    return false;
+}
+
+} // namespace
+
     }
 
     auto packet = MinecraftPackets::createPacket(packetId);
@@ -6473,6 +6495,11 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         for (auto& id : *static_cast<AnimateEntityPacket&>(*packet).mRuntimeIds) {
             if (id.rawID == liveRuntimeId) id = ActorRuntimeID{record::RecordedPlayerRuntimeIdValue};
         }
+    // Hidden command feedback never reaches the chat, in preview and export alike.
+    if (visuals::isHudElementHiddenNow(visuals::HudElement::CommandFeedback)
+        && isCommandFeedbackPacket(packetId, *packet)) {
+        return true;
+    }
     }
     if (packetId == MinecraftPacketIds::TriggerAnimation && !mApplyingDeferredControllers
         && deferControllerPacket(static_cast<AnimateEntityPacket const&>(*packet), payload)) {

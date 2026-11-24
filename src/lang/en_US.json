@@ -845,6 +845,8 @@
                 "hudHotbar": "Hotbar",
                 "hudHotbarHint": "Shown only while the camera follows a recorded player.",
                 "hudHint": "Applies to the preview and to exported video.",
+                "hudCommandFeedback": "Command feedback",
+                "hudCommandFeedbackHint": "Chat lines from commands, as the sendcommandfeedback game rule shows them: a command's output (\"Set own game mode to Creative\") and notices such as \"Your game mode has been updated\". Off, they never reach the chat; lines already in it stay until they fade.",
                 "previewAudio": "Audio",
                 "previewMute": "Mute",
                 "previewVolume": "Volume",

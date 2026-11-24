@@ -21,8 +21,9 @@ namespace {
 
 constexpr uint32_t bit(HudElement element) { return 1u << static_cast<uint32_t>(element); }
 
-// A replay starts with only the followed player's hotbar shown.
-constexpr uint32_t DefaultShownMask = bit(HudElement::Hotbar);
+// A replay starts with only the followed player's hotbar shown, and the chat keeps the commands' feedback for when it
+// is turned on.
+constexpr uint32_t DefaultShownMask = bit(HudElement::Hotbar) | bit(HudElement::CommandFeedback);
 constexpr uint32_t AllElementsMask  = (1u << HudElementCount) - 1;
 constexpr uint32_t WholeHudBit      = 1u << HudElementCount;
 constexpr uint32_t UnknownMask      = ~0u;

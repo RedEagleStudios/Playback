@@ -50,6 +50,7 @@ constexpr std::array<HudPreferenceKey, visuals::HudElementCount> kHudPreferenceK
      {visuals::HudElement::Scoreboard, "scoreboard"},
      {visuals::HudElement::ActionBar, "actionBar"},
      {visuals::HudElement::Hotbar, "hotbar"},
+     {visuals::HudElement::CommandFeedback, "commandFeedback"},
      }
 };
 

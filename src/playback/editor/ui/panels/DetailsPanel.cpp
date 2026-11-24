@@ -1100,6 +1100,9 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
         std::array const toggles{
             Toggle{visuals::HudElement::Chat,       ICON_CHAT,       "playback.refactorEditor.inspector.hudChat"_tr()      },
             Toggle{visuals::HudElement::BossBar,    ICON_BOSS_BAR,   "playback.refactorEditor.inspector.hudBossBar"_tr()   },
+            Toggle{visuals::HudElement::CommandFeedback,
+                   ICON_COMMAND_FEEDBACK,
+                   "playback.refactorEditor.inspector.hudCommandFeedback"_tr()},
             Toggle{visuals::HudElement::Title,      ICON_HEADING,    "playback.refactorEditor.inspector.hudTitle"_tr()     },
             Toggle{visuals::HudElement::Scoreboard, ICON_SCOREBOARD, "playback.refactorEditor.inspector.hudScoreboard"_tr()},
             Toggle{visuals::HudElement::ActionBar,  ICON_ACTION_BAR, "playback.refactorEditor.inspector.hudActionBar"_tr() },
@@ -1111,6 +1114,8 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
             std::string const tooltip = toggle.element == visuals::HudElement::Hotbar
                                           ? "playback.refactorEditor.inspector.hudHotbarHint"_tr()
                                           : std::string{};
+                                      : toggle.element == visuals::HudElement::CommandFeedback
+                                          ? "playback.refactorEditor.inspector.hudCommandFeedbackHint"_tr()
             if (widgets::toggleRow(
                     "##set-hud",
                     toggle.icon,

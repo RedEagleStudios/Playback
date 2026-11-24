@@ -105,6 +105,7 @@ namespace Playback::ReplayEditor::Icons {
 // Preview page
 #define ICON_HUD         "\ue11d" // monitor
 #define ICON_CHAT        "\ue117" // message-square
+#define ICON_COMMAND_FEEDBACK "\ue181" // terminal
 #define ICON_BOSS_BAR    "\ue221" // skull
 #define ICON_HEADING     "\ue384" // heading
 #define ICON_SCOREBOARD  "\ue1d1" // list-ordered

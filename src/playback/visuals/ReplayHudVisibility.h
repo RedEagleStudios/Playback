@@ -5,10 +5,11 @@
 
 namespace playback::visuals {
 
-// HUD parts the replay editor can hide.
-enum class HudElement : uint8_t { Chat, BossBar, Title, Scoreboard, ActionBar, Hotbar };
+// HUD parts the replay editor can hide. CommandFeedback is the chat lines commands produced: hidden, the replay drops
+// them before they reach the chat.
+enum class HudElement : uint8_t { Chat, BossBar, Title, Scoreboard, ActionBar, Hotbar, CommandFeedback };
 
-inline constexpr size_t HudElementCount = 6;
+inline constexpr size_t HudElementCount = 7;
 
 // Registers the HUD bindings the UI pack reads. Installed with the mod, because the bindings must exist before the
 // first HUD screen is built.

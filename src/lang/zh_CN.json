@@ -845,6 +845,8 @@
                 "hudHotbar": "快捷栏",
                 "hudHotbarHint": "仅在镜头跟随录制玩家时显示。",
                 "hudHint": "对预览和导出的视频都生效。",
+                "hudCommandFeedback": "命令反馈",
+                "hudCommandFeedbackHint": "命令产生的聊天消息，即 sendcommandfeedback 游戏规则显示的内容：命令的输出（“已将自己的游戏模式设置为创造模式”）以及“你的游戏模式已被更新”等通知。关闭后它们不会进入聊天栏；已显示的消息会在淡出前保留。",
                 "previewAudio": "音频",
                 "previewMute": "静音",
                 "previewVolume": "音量",
